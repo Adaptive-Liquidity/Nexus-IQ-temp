@@ -69,13 +69,20 @@ Use `./generate-mcp-config.sh` to point MCP clients at this repo path.
 
 Use a provider preset as the source of truth for runtime values:
 
-- `.env.openai.example`
-- `.env.anthropic.example`
-- `.env.gemini.example`
-- `.env.ollama.example`
-- `.env.minimal.example`
+| Preset | Embedding dim | Schema change? |
+|---|---|---|
+| `.env.openai.example` | 1536 | No — MVP default |
+| `.env.anthropic.example` | 1536 (uses OpenAI embeddings) | No |
+| `.env.gemini.example` | 768 | **Yes — edit migration first** |
+| `.env.ollama.example` | varies by model | **Yes — edit migration first** |
+| `.env.minimal.example` | 1536 | No |
 
-Example:
+> **Gemini / Ollama users:** read the `SCHEMA CHANGE REQUIRED` block at the top
+> of the matching `.env.<provider>.example` file and update
+> `vendor/aeon-iq/migrations/0001_initial.sql` **before** running `./install.sh`.
+> Initialising the database with the wrong dimension requires a full volume reset.
+
+Example (OpenAI — no schema changes):
 
 ```bash
 cp .env.openai.example .env
