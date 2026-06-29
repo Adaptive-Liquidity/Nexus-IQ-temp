@@ -70,6 +70,10 @@ services:
       EXTRACTOR_MODEL: ${EXTRACTOR_MODEL:-gpt-4o-mini}
       EXTRACTOR_BASE_URL: ${EXTRACTOR_BASE_URL:-https://api.openai.com}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # Required when UPSTREAM_BASE_URL / EMBEDDING_BASE_URL / EXTRACTOR_BASE_URL
+      # use http:// or resolve to a private/loopback address (e.g. Ollama on
+      # host.docker.internal). Never set this to true in a public deployment.
+      AEON_ALLOW_INSECURE_PROVIDER_URLS: ${AEON_ALLOW_INSECURE_PROVIDER_URLS:-false}
 
       # Server runtime.
       PORT: ${AEON_PORT:-8080}
