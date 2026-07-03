@@ -74,6 +74,7 @@ services:
       # use http:// or resolve to a private/loopback address (e.g. Ollama on
       # host.docker.internal). Never set this to true in a public deployment.
       AEON_ALLOW_INSECURE_PROVIDER_URLS: ${AEON_ALLOW_INSECURE_PROVIDER_URLS:-false}
+      AEON_EVIDENCE_SIGNING_KEY: ${AEON_EVIDENCE_SIGNING_KEY:-}
 
       # Server runtime.
       PORT: ${AEON_PORT:-8080}
@@ -124,6 +125,7 @@ services:
       # MUST equal the AEON service's MANAGEMENT_API_KEY (same secret).
       NEXUS_AEON_MANAGEMENT_KEY: ${MANAGEMENT_API_KEY}
       NEXUS_AEON_HMAC_KEY: ${NEXUS_AEON_HMAC_KEY}
+      NEXUS_AEON_VERIFYING_KEY: ${NEXUS_AEON_VERIFYING_KEY:-}
       NEXUS_AEON_AGENT_ID: ${NEXUS_AEON_AGENT_ID:-nexusiq}
       NEXUS_AEON_SESSION_ID: ${NEXUS_AEON_SESSION_ID:-default}
       NEXUS_AEON_TIMEOUT_MS: ${NEXUS_AEON_TIMEOUT_MS:-5000}
@@ -179,6 +181,7 @@ services:
       NEXUS_AEON_BASE_URL: ${NEXUS_AEON_BASE_URL:-http://aeon:8080}
       NEXUS_AEON_MANAGEMENT_KEY: ${MANAGEMENT_API_KEY}
       NEXUS_AEON_HMAC_KEY: ${NEXUS_AEON_HMAC_KEY}
+      NEXUS_AEON_VERIFYING_KEY: ${NEXUS_AEON_VERIFYING_KEY:-}
       NEXUS_AEON_AGENT_ID: ${NEXUS_AEON_AGENT_ID:-nexusiq}
       NEXUS_AEON_SESSION_ID: ${NEXUS_AEON_SESSION_ID:-default}
       NEXUS_AEON_TIMEOUT_MS: ${NEXUS_AEON_TIMEOUT_MS:-5000}
