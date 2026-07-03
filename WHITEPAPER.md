@@ -4,7 +4,7 @@
 `contact@adaptiveliquidity.com`
 
 Version 1.0 — July 2026
-Status: Technical white paper (living document; tracks Nexus `85780b8a`, AEON-IQ `852f7cb`, Nexus-IQ kit `09c500a`)
+Status: Technical white paper (living document; audited baseline Nexus `85780b8a` / AEON-IQ `852f7cb` / kit `09c500a`; §8.3/§9/§10 refreshed against the v1.0-rc branch — Nexus `3b7e7ec`, AEON-IQ `76f09b4`)
 
 ---
 
@@ -548,7 +548,9 @@ The headline: **median memory overhead is ~3 ms (empty) to ~10 ms (seeded) per r
 | 1,000 | 10.72 ms | 13.83 ms | 17.93 ms | 100 |
 | 10,000 | 95.07 ms | 101.72 ms | 123.71 ms | 50 |
 
-The published suite stopped at 1,000. Extending to 10,000 — and inspecting the plan — surfaced a real scaling defect: **the decay-weighted `ORDER BY` expression defeats the HNSW index.** `EXPLAIN ANALYZE` shows a sequential scan with a top-N heapsort over all 10,000 rows; pgvector can only serve ANN queries whose sort key is the bare `embedding <=> $q`, and formula (1) wraps that operator in `exp()`/importance arithmetic. Latency is therefore linear in corpus size (≈2.9 → 10.7 → 95 ms), and the HNSW index documented in the operations runbook is not actually reached by the hot path at any scale. The remedy is standard and now on the roadmap (§10): a two-stage plan — ANN probe on raw cosine for the top-K (K ≈ 100, index-served, O(log n)), then apply (1) to re-rank K rows. Proposition 5(iv) guarantees the two-stage result is exact whenever the decay/importance modifier is cohort-constant, and bounded-error otherwise; with the neutral defaults (λ=β=0) it is exact always.
+The published suite stopped at 1,000. Extending to 10,000 — and inspecting the plan — surfaced a real scaling defect: **the decay-weighted `ORDER BY` expression defeats the HNSW index.** `EXPLAIN ANALYZE` shows a sequential scan with a top-N heapsort over all 10,000 rows; pgvector can only serve ANN queries whose sort key is the bare `embedding <=> $q`, and formula (1) wraps that operator in `exp()`/importance arithmetic. Latency is therefore linear in corpus size (≈2.9 → 10.7 → 95 ms), and the HNSW index documented in the operations runbook is not actually reached by the hot path at any scale. The remedy is standard: a two-stage plan — ANN probe on raw cosine for the top-K (K ≈ 100, index-served), then apply (1) to re-rank K rows. Proposition 5(iv) guarantees the two-stage result is exact whenever the decay/importance modifier is cohort-constant, and bounded-error otherwise; with the neutral defaults (λ=β=0) it is exact always.
+
+**Status: fixed and re-measured.** The two-stage query shipped (`ANN_CANDIDATE_LIMIT`=100, `SET LOCAL hnsw.ef_search` per retrieval transaction, guarded by an `EXPLAIN`-plan regression test that fails CI if the index scan is ever lost). Post-fix, same environment and parameters: **10,000-memory search p50 6.31 ms** (was 95.07 ms — 15×), p95 9.08 ms, with flat scaling across 100/1k/10k (3.82 / 9.81 / 6.31 ms p50). The p99 latency tail was likewise fixed by batching the pressure sweep's per-row UPDATE loop into one UNNEST statement: seeded-path **p99 1,031 ms → 108 ms, max 3,023 ms → 110 ms** (n=200). Raw artifacts: `benchmarks/results/post-fix-run/` in the AEON-IQ repository.
 
 ### 8.4 Ranked retrieval quality (new benchmark, 360 queries, 1,120-memory corpus)
 
@@ -597,22 +599,22 @@ The suite intentionally ships the negative case: when the live context is tiny, 
 We enumerate every known gap between what a reader might infer and what is true. Several were found during the audit performed for this paper and are stated here *before* they are fixed, in keeping with the system's own retired-claims discipline.
 
 **Documentation/implementation divergences (bugs of description):**
-1. The AEON-IQ README still displays the retired *linear* staleness form of the retrieval score; the implementation (and this paper's formula (1)) is exponential, and the co-access bonus is a post-query re-rank, not a SQL term.
-2. The RMK policy default `retrieval_threshold = 0.20` differs from the environment default `RETRIEVAL_THRESHOLD = 0.80`; an agent whose first learned policy row is seeded from struct defaults retrieves far more conservatively than a static-config deployment. This interaction deserves either unification or explicit documentation.
-3. Migrations 0022–0024 (extraction outbox, cognitive-hypervisor timeline, timeline branch chains) exist in the schema beyond what the architecture documentation covers.
+1. ~~The AEON-IQ README displayed the retired *linear* staleness form~~ — **closed**: README now shows the exponential form with the co-access re-rank described as a post-query step.
+2. ~~RMK policy default 0.20 vs env default 0.80~~ — **closed**: both defaults are unified at 0.80 via a shared constant, with a regression test.
+3. ~~Migrations 0022–0024 beyond documented architecture~~ — **corrected**: the cognitive-hypervisor timeline is in fact fully implemented and integration-tested (hash-chained events with server-computed `prev_event_digest`, branch-aware resolution); the endpoints are now documented in the architecture reference.
 
 **Aspiration/implementation gaps (roadmap items that could be mistaken for features):**
-4. The memory `sensitivity` field **gates nothing today** except retrieval-injection filtering of `private`/`secret` rows; memory content is still sent to the configured LLM provider for embedding and extraction. "Private memories never leave the box" is Phase-1 roadmap, not current behaviour.
-5. RMK's live reward uses proxies: `task_success ≡ 1.0`, precision is a top-5 fill rate, token-savings is an injection share (which *rewards* injection). The hill-climb accept/reject step is implemented but not wired into the background worker — exploration currently persists unconditionally. Proposition 10's containment guarantees are what make this safe to run in production anyway.
-6. The PI controller is reconstructed per sweep; its integral action does not persist across sweeps (§5.4 scope note).
-7. Nexus's `fork_and_race` races futures over one sandbox; true parallel multi-sandbox speculation is roadmap.
-8. Self-issued memory evidence is deliberately reported as `Advisory` (not `Attested`) until counter-signature verification ships.
+4. ~~`sensitivity` gates nothing beyond injection filtering~~ — **substantially closed**: archival and conflict-detection candidate selection exclude `private`/`secret`; PATCH re-embed routes labeled content through a scoped local embedding lane (`LOCAL_EMBEDDING_BASE_URL`, loopback/private permitted for that variable only) or refuses with 409. Residual: first-pass extraction still embeds via the provider — safe today only because sensitivity is assigned post-hoc; insert-time labeling would require extending the guard.
+5. ~~Hill-climb accept/reject unwired; `task_success ≡ 1.0` forever~~ — **closed**: the worker now compares per-policy mean episode rewards and rejects regressions (re-rolling from the last known-good policy), and a background job backfills `task_success` from `/api/v1/feedback` via each episode's recorded injected-memory set (24 h attribution window; un-fed-back episodes keep the documented assumed default). Residual: `precision` remains a fill-rate proxy, and the learning has not yet been *evaluated* — containment (Prop. 10) is proven, effectiveness is not.
+6. ~~PI controller state resets every sweep~~ — **closed**: per-agent `aggressiveness`/`integral_error` persist (`amp_controller_state`) and restore clamped to the Proposition-7 invariant ranges.
+7. Nexus's `fork_and_race` races futures over one sandbox; true parallel multi-sandbox speculation is roadmap. *(unchanged)*
+8. ~~Self-issued memory evidence capped at `Advisory`~~ — **closed**: AEON-IQ Ed25519 counter-signs the served hit set; Nexus verifies against a pinned `NEXUS_AEON_VERIFYING_KEY` before reporting `Attested*` (missing/invalid signatures drop the hits and degrade the outcome), and the receipt path upgrades to `Attested` only on in-process verification that daemon wire callers cannot forge.
 
 **Structural limitations (inherent to the current design, declared in the artifacts themselves):**
 9. Proof Capsules attest that *the Nexus runtime observed and signed these facts* — they do not prove correct execution, absence of external side effects, or replay determinism (WASI path), and they are not SLSA/in-toto artifacts yet. The `limitations[]` array in every capsule says so machine-readably.
 10. Isolation is userspace WASM confinement, not hardware virtualization; capability path containment is lexical (symlink-unaware) by documented default.
 11. **No external security audit has been completed.** Internal threat models exist; an external audit is planned before v1.1.0.
-12. Retrieval quality at ≥10k memories/agent currently degrades linearly (HNSW bypass, §8.3) — discovered by this paper's evaluation and now tracked.
+12. ~~Retrieval at ≥10k memories/agent degrades linearly (HNSW bypass)~~ — **closed**: two-stage ANN retrieval, re-measured flat at 6.31 ms p50 @10k (§8.3), with a CI plan-regression guard.
 13. The evaluation is deterministic/lexical end-to-end (§8.7); no semantic-recall or cross-system claims are made.
 
 ---
@@ -621,16 +623,16 @@ We enumerate every known gap between what a reader might infer and what is true.
 
 Ordered by leverage per unit of engineering, each item names the property it converts from "claimed" to "checked":
 
-**R1. Two-stage decay retrieval (ANN probe → exact re-rank).** Restore O(log n) retrieval at ≥10⁴ memories by sorting the inner CTE on the bare `embedding <=> $q` (HNSW-served, top-K≈100) and applying formula (1) over K rows. Exact under cohort-constant modifiers (Prop. 5(iv)); re-measure §8.3 after. *(Found by this paper.)*
-**R2. Sensitivity enforcement.** Gate embedding/extraction egress on `sensitivity`; local-only embedding lane (e.g. bge-small at 384 dims — the schema already parameterizes dimension) for `private`/`secret`. Converts limitation #4 into the "private = never leaves the box" guarantee the PRD promises.
-**R3. Close the RMK loop.** Wire `/api/v1/feedback` into `task_success`; replace fill-rate precision with feedback-labelled precision; enable the existing hill-climb acceptance (and its rollback) in the worker; persist controller state across sweeps (limitation #5/#6). Then evaluate the *learning*, not just its containment.
-**R4. Counter-signed memory attestation.** AEON-IQ counter-signs evidence digests it served; Nexus verifies before emitting `Attested` modes — upgrading memory evidence from self-issued to two-party (limitation #8), a prerequisite for third-party verifiable agent-memory audits.
-**R5. Semantic evaluation.** Run the extended-recall harness with real embedding models and a public long-memory suite (LongMemEval; LoCoMo) plus at least one cross-system baseline under identical corpora. The §8.4 miss-cluster prediction (inflection misses vanish under semantic embeddings) is the first falsifiable test.
-**R6. Attestation interop.** Emit capsules as in-toto/DSSE envelopes with Sigstore signing; align `limitations[]` with SLSA provenance predicates so existing supply-chain verifiers can consume runtime attestations.
+**R1. Two-stage decay retrieval — SHIPPED.** ANN probe on the bare `embedding <=> $q` (top-K=100, `hnsw.ef_search` per transaction) + exact re-rank over K rows; re-measured flat at 6.31 ms p50 @10k with a CI plan-regression test (§8.3).
+**R2. Sensitivity enforcement — SHIPPED (core).** Archival/conflict candidates exclude `private`/`secret`; PATCH re-embed uses the scoped `LOCAL_EMBEDDING_BASE_URL` lane or refuses. Remaining: local-model presets and insert-time labeling support.
+**R3. RMK loop closure — SHIPPED (mechanism).** Feedback-derived `task_success` backfill + per-policy hill-climb accept/reject with regression rollback + persisted controller state. Remaining: feedback-labelled precision, and *evaluating* the learning (effectiveness, not just containment).
+**R4. Counter-signed memory attestation — SHIPPED.** AEON-IQ Ed25519-signs served hit sets (`aeon-evidence-sig-v1`); Nexus verifies against a pinned key before any `Attested*` mode; tampered or unsigned responses degrade and drop. Third-party verifiable agent-memory audits are now possible.
+**R5. Semantic evaluation — HARNESS SHIPPED, RUNS PENDING.** `run_semantic_quality.py` (API-first, env/cost-gated, LongMemEval + LoCoMo loaders, stratified sampling, full ranked metrics) is validated end-to-end on synthetic fixtures; the live runs against real embedding models — and the §8.4 miss-cluster prediction test — await an API key and dataset access.
+**R6. Attestation interop — PARTIALLY SHIPPED.** `nexus aeon export-dsse` emits capsules as signed DSSE envelopes (spec PAE, payloadType `application/vnd.nexus.proof-capsule+json`). Remaining: Sigstore/Rekor transparency log, SLSA predicate alignment.
 **R7. Provider router + cost ledger** (PRD Phase 2): multi-provider routing with per-run cost recorded into the capsule and timeline — the "governed, inspectable, recoverable, exportable" loop closed with economics.
 **R8. Timeline branching / cognitive hypervisor** (schema already at migrations 0023–0024): first-class branch-and-merge of agent timelines over snapshot lineage — speculative *cognition*, not just speculative execution.
 **R9. Scale-out and tenancy:** Postgres RLS multi-tenancy, OpenTelemetry traces, distributed snapshot sync (RFC 0001 Phase 3+) with the content-addressed digests of §4.2 as the transfer keys.
-**R10. External audit + reproduction bounty** before v1.1.0, per AUDIT.md — the only item that can move trust from "we say" to "they checked."
+**R10. External audit + reproduction bounty** before v1.1.0, per AUDIT.md — the only item that can move trust from "we say" to "they checked." *(Audit-scope package prepared; engagement is a pending human action.)*
 
 ---
 
