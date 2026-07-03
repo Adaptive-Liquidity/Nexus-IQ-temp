@@ -92,3 +92,19 @@ docker compose exec -T postgres psql -U nexusiq -d nexusiq -c "REINDEX INDEX CON
 ```
 
 If index maintenance collides with ongoing writes, choose conservative timings and monitor query impact.
+
+
+## AEON-IQ role split (proxy vs worker)
+
+The stack runs AEON-IQ as two services sharing one database:
+
+| Service | `MEMORYOS_ROLE` | Runs | Pool budget |
+|---|---|---|---|
+| `aeon` | `proxy` | request serving only (chat proxy + management API) | `DB_MAX_CONNECTIONS` (default 20) |
+| `aeon-worker` | `worker` | archival, extraction outbox, RMK/AMP sweeps, HNSW maintenance; serves `/health` + `/metrics` only, no host port | `WORKER_DB_MAX_CONNECTIONS` (default 5) |
+
+Rationale: background sweeps over large corpora previously shared the hot
+path's connection pool and produced a measured p99 latency tail. The split
+caps background work at its own small budget so it can never starve request
+serving. To run everything in one container (small machines), remove
+`aeon-worker` and set `MEMORYOS_ROLE=all` (or unset it) on `aeon`.

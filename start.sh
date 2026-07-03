@@ -2,7 +2,8 @@
 #
 # start.sh — bring up the core NexusIQ stack and wait for it to be healthy.
 #
-# Starts postgres, aeon, and nexus-agentd (the always-on services). nexus-mcp
+# Starts postgres, aeon, aeon-worker, and nexus-agentd (the always-on
+# services). nexus-mcp
 # is on the `tools` profile and runs on demand, so it is intentionally not
 # started here.
 #
@@ -30,8 +31,8 @@ if [[ ! -f "${ROOT_DIR}/.env" ]]; then
   exit 1
 fi
 
-step "Starting core services (postgres, aeon, nexus-agentd)"
-if ! compose up -d postgres aeon nexus-agentd; then
+step "Starting core services (postgres, aeon, aeon-worker, nexus-agentd)"
+if ! compose up -d postgres aeon aeon-worker nexus-agentd; then
   err "docker compose up failed."
   exit 1
 fi
