@@ -24,15 +24,16 @@ That is the complete setup sequence. Everything below explains what each step do
 ## What you get
 
 - **Nexus** — a WASM sandbox hypervisor with the `aeon-memory` feature. Executes WASM modules in isolated, capability-gated WASI environments, produces cryptographically-bound Proof Capsules, and supports snapshot/rollback.
-- **AEON-IQ** — a persistent memory plane (`memoryos` Rust/Axum service). Stores episodic memories as vector embeddings (via pgvector), runs semantic recall, records MemoryEvidence tied to proofs, and maintains an agent timeline.
+- **AEON-IQ** — a persistent memory plane (`memoryos` Rust/Axum service), split into a request-serving proxy and a dedicated background worker (see [Architecture](#architecture)). Stores episodic memories as vector embeddings (via pgvector), runs semantic recall, records MemoryEvidence tied to proofs, and maintains an agent timeline.
 - **Together**: WASM execution with a memory plane. Every execution produces a Proof Capsule; timeline events are written to AEON and queryable via its REST API.
-- **One-command setup**: `./install.sh` clones source, generates secrets, and builds everything in Docker. No Rust toolchain needed on your machine.
+- **Ed25519 evidence attestation**: AEON-IQ counter-signs every search response; Nexus verifies the signature before a proof capsule can claim `Attested`/`AttestedWithRecall` (vs. the unverified `Advisory` fallback). See [Evidence attestation](#evidence-attestation).
+- **One-command setup**: `./install.sh` clones source, generates secrets, and builds everything in Docker (or pulls prebuilt images — see [Prebuilt images](#prebuilt-images)). No Rust toolchain needed on your machine.
 
 ---
 
 ## Architecture
 
-Four Docker services, all on an isolated internal network:
+Five Docker services, all on an isolated internal network:
 
 ```
  ┌───────────────────────────────────────────────────────────────┐
@@ -42,7 +43,8 @@ Four Docker services, all on an isolated internal network:
  │  (Claude Desktop / Cursor / OpenHands)              │         │
  │                                               ┌─────▼──────┐ │
  │  curl / browser ─── 127.0.0.1:8080 ─────────▶│   aeon     │ │
- │                                               │ (REST API) │ │
+ │                                               │(proxy, REST│ │
+ │                                               │    API)    │ │
  └───────────────────────────────────────────────┴─────┬───┬──┘ │
                                                        │   │
  ┌─ Docker internal network (nexusiq) ─────────────────│───│────┐
@@ -54,21 +56,32 @@ Four Docker services, all on an isolated internal network:
  │  └────────────────┘                └────────────┘   │   │    │
  │                                         │           │   │    │
  │  ┌─────────────────────────────────────────────┐    │   │    │
- │  │  postgres (pgvector, internal only, no port)│◀───┘   │    │
- │  └─────────────────────────────────────────────┘        │    │
- │             ▲                                            │    │
- │             └──────────────────────────────────────────┘    │
+ │  │  postgres (pgvector, internal only, no port)│◀──┬─┘   │    │
+ │  └─────────────────────────────────────────────┘   │     │    │
+ │             ▲                                       │     │    │
+ │             └───────────────────────────┐   ┌───────┘     │    │
+ │                                          │   │             │    │
+ │                              ┌───────────▼───▼──┐          │    │
+ │                              │   aeon-worker     │          │    │
+ │                              │ (archival, RMK/AMP│          │    │
+ │                              │  sweeps, extraction│          │    │
+ │                              │  outbox drain)     │          │    │
+ │                              └────────────────────┘          │    │
+ │             └──────────────────────────────────────────────┘    │
  └─────────────────────────────────────────────────────────────┘
 ```
 
 | Service | Role | Host exposure |
 |---|---|---|
 | `postgres` | pgvector storage for AEON-IQ | None (internal only) |
-| `aeon` | AEON-IQ REST API | `127.0.0.1:8080` |
+| `aeon` | AEON-IQ REST API — hot request path only (`MEMORYOS_ROLE=proxy`) | `127.0.0.1:8080` |
+| `aeon-worker` | AEON-IQ background jobs: archival, RMK/AMP sweeps, extraction-outbox drain (`MEMORYOS_ROLE=worker`) | None (internal only) |
 | `nexus-agentd` | Nexus execution daemon | Unix socket (shared volume) |
 | `nexus-mcp` | STDIO MCP server | None — launched on demand |
 
 `nexus-mcp` is **not** a long-running port. MCP clients launch it via `connect-mcp.sh`, which runs `docker compose run --rm -T nexus-mcp` and speaks JSON-RPC 2.0 over stdin/stdout. There is no HTTP MCP endpoint.
+
+`aeon-worker` matters even though it serves no client traffic directly: extraction jobs are enqueued by `aeon` and only drained by `aeon-worker` (`EXTRACTION_OUTBOX_ENABLED` defaults to `true`), so a dead worker means memory writes silently stop while chat completions keep succeeding. `./doctor.sh` and `./start.sh`'s health wait both check `aeon-worker`'s `/health` explicitly for this reason.
 
 ---
 
@@ -110,13 +123,13 @@ That is the only required edit for the default OpenAI provider.
 
 The installer:
 - Checks for Docker and the Compose plugin
-- Generates secrets (Postgres password, management API key, HMAC key, agentd auth token) and writes them into `.env`
-- Clones the Nexus and AEON-IQ source trees into `./vendor/` (or links your local checkouts if you set `NEXUSIQ_VENDOR_NEXUS` / `NEXUSIQ_VENDOR_AEON`)
-- Builds Docker images locally (no prebuilt images are published yet)
+- Generates secrets (Postgres password, management API key, legacy HMAC key, Ed25519 evidence-signing key, agentd auth token) and writes them into `.env`
+- Clones the Nexus and AEON-IQ source trees into `./vendor/` (or links your local checkouts if you set `NEXUSIQ_VENDOR_NEXUS` / `NEXUSIQ_VENDOR_AEON`), pinned to a tested revision (see [VERSION_MATRIX.md](VERSION_MATRIX.md))
+- Builds Docker images locally, or pulls prebuilt images if `NEXUSIQ_USE_PREBUILT=true` (see [Prebuilt images](#prebuilt-images))
 - Creates `./data/{proofs,timeline,modules,logs}`
 - Bakes a sample WASM module into `./data/modules/sample_tool.wasm`
 
-The first build can take 5–15 minutes depending on machine speed (Rust compilation). Subsequent runs use the Docker layer cache.
+The first source build can take 5–15 minutes depending on machine speed (Rust compilation); subsequent runs use the Docker layer cache, and the prebuilt-image path skips compilation entirely.
 
 ### 3. Start the stack
 
@@ -124,7 +137,7 @@ The first build can take 5–15 minutes depending on machine speed (Rust compila
 ./start.sh
 ```
 
-Starts `postgres`, `aeon`, and `nexus-agentd` in the background and waits for all three to report healthy. `nexus-mcp` is not started here — it runs on demand.
+Starts `postgres`, `aeon`, `aeon-worker`, and `nexus-agentd` in the background and waits for all four to report healthy. `nexus-mcp` is not started here — it runs on demand.
 
 ### 4. Verify everything is up
 
@@ -216,10 +229,37 @@ Without this flag, the `aeon` container will refuse to start when it detects a n
 
 ---
 
+## Evidence attestation
+
+AEON-IQ Ed25519-counter-signs every search response (`AEON_EVIDENCE_SIGNING_KEY`, auto-generated by `install.sh`); Nexus verifies that signature before a proof capsule is allowed to claim `Attested` / `AttestedWithRecall` instead of the unverified `Advisory` fallback.
+
+`AEON_EVIDENCE_SIGNING_KEY` is generated for you, but its corresponding public key (`NEXUS_AEON_VERIFYING_KEY`) is **not** — it must be pinned manually after the stack is running, once:
+
+```bash
+curl -s -H "X-Management-Key: $MANAGEMENT_API_KEY" \
+  http://127.0.0.1:8080/api/v1/evidence/verifying-key
+```
+
+Copy the returned `key_id` into `.env` as `NEXUS_AEON_VERIFYING_KEY`, then `./stop.sh && ./start.sh`. Until this is set, `./doctor.sh` warns (it does not fail the check) and capsules stay at `Advisory` — verification is additive security, not required for the stack to function.
+
+---
+
+## Prebuilt images
+
+By default `./install.sh` builds Nexus and AEON-IQ from source (first build: 5–15 min; cached thereafter). To skip compilation entirely and pull published, cosign-signed images instead:
+
+```bash
+NEXUSIQ_USE_PREBUILT=true NEXUSIQ_IMAGE_TAG=<release tag> ./install.sh
+```
+
+`NEXUSIQ_IMAGE_TAG` should match a row in [VERSION_MATRIX.md](VERSION_MATRIX.md) for a reproducible pull. **No kit release has been tagged yet** — omitting `NEXUSIQ_IMAGE_TAG` pulls the floating `:latest` tag, which `install.sh` will warn about since it is not pinned to any tested compatibility contract. Prefer source builds (the default) until a real release tag exists.
+
+---
+
 ## Starting and stopping the stack
 
 ```bash
-./start.sh         # start postgres, aeon, nexus-agentd (detached)
+./start.sh         # start postgres, aeon, aeon-worker, nexus-agentd (detached)
 ./stop.sh          # stop the stack (data volumes preserved)
 ./logs.sh aeon     # follow logs for a specific service
 ./logs.sh          # follow all service logs
@@ -252,15 +292,17 @@ Each line is `PASS <check>` or `FAIL <check>`. Warnings (`WARN`) are advisory an
 Checks run:
 - `.env` present and readable
 - Docker daemon running, Compose plugin available
-- All four Compose services defined
+- All five Compose services defined
 - Postgres healthy (`pg_isready`)
 - AEON `/health` returns 200
+- **AEON worker `/health` returns 200** — catches a dead `aeon-worker` before it silently stops memory writes (see [Architecture](#architecture))
 - AEON management API authenticated (key required, 401/403 without)
 - `nexus-agentd` live (`nexus daemon ping`)
 - `nexus-mcp` handshake (initialize + tools/list)
 - `data/proofs` and `data/timeline` writable
 - No mock/synthetic flags active
 - Provider key present (warning only if missing)
+- Evidence counter-signature verification configured (warning only if `NEXUS_AEON_VERIFYING_KEY` is unset — see [Evidence attestation](#evidence-attestation))
 
 ---
 
@@ -384,7 +426,7 @@ curl -fsS -X POST http://127.0.0.1:8080/api/v1/memories/search \
 
 ## Known limitations
 
-- No prebuilt images are published yet. `./install.sh` always builds from source (first build: 5–15 min).
+- No versioned kit release has been tagged yet, so `NEXUSIQ_USE_PREBUILT=true` can only pull the unpinned `:latest` tag (see [Prebuilt images](#prebuilt-images)) — source build remains the default and reproducible path.
 - Ollama support requires a manual schema change and is experimental.
 - The AEON pgvector column is fixed at `vector(1536)`. Non-1536-dim embedding models require a schema migration.
 - Anthropic does not provide an embeddings API; a separate embeddings provider is required when using the Anthropic preset.
