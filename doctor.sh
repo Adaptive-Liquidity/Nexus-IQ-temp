@@ -204,6 +204,25 @@ else
   warn "no provider key for UPSTREAM_PROVIDER=${provider} — memory write/recall (embeddings) will be UNAVAILABLE; Nexus execution + proofs still work"
 fi
 
+# ---- 11. evidence counter-signature verification (warn, not fail) -----------
+verifying_key="$(v NEXUS_AEON_VERIFYING_KEY)"
+if [[ -z "$verifying_key" ]]; then
+  warn "NEXUS_AEON_VERIFYING_KEY not set — Nexus does not verify AEON-IQ's evidence counter-signatures (capsules stay Advisory). Pin it from: curl -s -H \"X-Management-Key: \$MANAGEMENT_API_KEY\" http://127.0.0.1:${AEON_PORT:-8080}/api/v1/evidence/verifying-key"
+else
+  reported="$(curl -sf -H "X-Management-Key: $(v MANAGEMENT_API_KEY)" "http://127.0.0.1:${AEON_PORT:-8080}/api/v1/evidence/verifying-key" 2>/dev/null || true)"
+  reported_key="$(printf '%s' "$reported" | sed -n 's/.*"key_id":"\([0-9a-f]*\)".*/\1/p')"
+  reported_persistent="$(printf '%s' "$reported" | grep -o '"persistent":[a-z]*' | cut -d: -f2)"
+  if [[ -z "$reported_key" ]]; then
+    warn "could not read AEON-IQ's evidence verifying key to cross-check NEXUS_AEON_VERIFYING_KEY"
+  elif [[ "$reported_key" != "$verifying_key" ]]; then
+    fail "NEXUS_AEON_VERIFYING_KEY does not match AEON-IQ's reported evidence key — verification will fail closed (hits dropped, Degraded attestation)"
+  elif [[ "$reported_persistent" != "true" ]]; then
+    fail "AEON-IQ is using an EPHEMERAL evidence signing key (AEON_EVIDENCE_SIGNING_KEY unset) — the pinned NEXUS_AEON_VERIFYING_KEY will break on next restart"
+  else
+    pass "evidence counter-signature key pinned and matches AEON-IQ (persistent)"
+  fi
+fi
+
 # ---- verdict ----------------------------------------------------------------
 head "Summary"
 if [[ "$FAILS" -eq 0 ]]; then

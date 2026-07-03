@@ -1,0 +1,43 @@
+name: Release manifest
+
+# On kit tags: generate the release-pinned artifacts RELEASING.md previously
+# prescribed as manual steps — a pinned compose manifest, SHA256SUMS, and the
+# resolved image digests — and attach them to the GitHub release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate pinned manifest + checksums
+        run: |
+          mkdir -p release
+          TAG="${GITHUB_REF_NAME}"
+          # Pinned compose manifest: image refs resolved to this tag.
+          NEXUS_IMAGE="ghcr.io/adaptiveliquidity/nexusiq-nexus:${TAG#v}" \
+          AEON_IQ_IMAGE="ghcr.io/adaptiveliquidity/aeon-iq:${TAG#v}" \
+          POSTGRES_USER=x POSTGRES_PASSWORD=x POSTGRES_DB=x \
+          MANAGEMENT_API_KEY=x NEXUS_AEON_HMAC_KEY=x NEXUS_AGENTD_AUTH_TOKEN=x \
+            docker compose config > "release/docker-compose.${TAG}.pinned.yml"
+          # Kit source checksums.
+          find . -maxdepth 2 -type f \( -name "*.sh" -o -name "docker-compose.yml" -o -name "Dockerfile*" \) \
+            -not -path "./release/*" -print0 | sort -z | xargs -0 sha256sum > "release/SHA256SUMS.${TAG}"
+          # Resolve published image digests when the images exist.
+          for img in "ghcr.io/adaptiveliquidity/nexusiq-nexus:${TAG#v}" \
+                     "ghcr.io/adaptiveliquidity/aeon-iq:${TAG#v}"; do
+            docker buildx imagetools inspect "$img" >> "release/IMAGE_DIGESTS.${TAG}.txt" 2>/dev/null \
+              || echo "(not yet published: $img)" >> "release/IMAGE_DIGESTS.${TAG}.txt"
+          done
+
+      - name: Attach to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*

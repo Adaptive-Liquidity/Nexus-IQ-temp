@@ -143,6 +143,41 @@ run_step "Validating .env"
 bash "${ROOT_DIR}/scripts/validate-env.sh"
 
 # ============================================================================
+# Prebuilt-image fast path: skip source vendoring and local compilation
+# entirely and pull the cosign-signed release images from ghcr instead.
+# Requires a published release (see RELEASING.md / VERSION_MATRIX.md for the
+# tag ↔ image mapping). Becomes the recommended default once v1.0 images
+# exist; until then, source build remains the default.
+# ============================================================================
+if [[ "${NEXUSIQ_USE_PREBUILT:-false}" == "true" ]]; then
+  run_step "Prebuilt-image mode (NEXUSIQ_USE_PREBUILT=true)"
+  PREBUILT_TAG="${NEXUSIQ_IMAGE_TAG:-latest}"
+  # Only set the image refs if the operator hasn't overridden them.
+  grep -q '^NEXUS_IMAGE=' "${ROOT_DIR}/.env" 2>/dev/null     || echo "NEXUS_IMAGE=ghcr.io/adaptiveliquidity/nexusiq-nexus:${PREBUILT_TAG}" >> "${ROOT_DIR}/.env"
+  grep -q '^AEON_IQ_IMAGE=' "${ROOT_DIR}/.env" 2>/dev/null     || echo "AEON_IQ_IMAGE=ghcr.io/adaptiveliquidity/aeon-iq:${PREBUILT_TAG}" >> "${ROOT_DIR}/.env"
+  ok "image refs pinned in .env (tag: ${PREBUILT_TAG})"
+  if compose pull aeon aeon-worker nexus-agentd; then
+    ok "prebuilt images pulled"
+  else
+    err "could not pull prebuilt images from ghcr (no release published yet, or no network)."
+    err "Re-run without NEXUSIQ_USE_PREBUILT to build from source instead."
+    exit 1
+  fi
+  # Data directories + the sample module are still needed in prebuilt mode.
+  for d in proofs timeline modules logs run; do
+    mkdir -p "${ROOT_DIR}/data/${d}"
+  done
+  SAMPLE_WASM="${ROOT_DIR}/data/modules/sample_tool.wasm"
+  if [[ ! -f "$SAMPLE_WASM" ]]; then
+    WASM_B64='AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEQIGbWVtb3J5AgAGX3N0YXJ0AAAKBAECAAsACgRuYW1lAgMBAAA='
+    printf '%s' "$WASM_B64" | base64 -d > "$SAMPLE_WASM"
+    ok "baked data/modules/sample_tool.wasm"
+  fi
+  ok "prebuilt-image install complete — run ./start.sh next"
+  exit 0
+fi
+
+# ============================================================================
 run_step "Vendoring build contexts into ./vendor"
 # ============================================================================
 mkdir -p "${ROOT_DIR}/vendor"
@@ -193,9 +228,14 @@ if [[ -n "${NEXUSIQ_VENDOR_AEON:-}" && -d "${NEXUSIQ_VENDOR_AEON}" ]]; then
 elif [[ -e "${ROOT_DIR}/vendor/aeon-iq" ]]; then
   ok "vendor/aeon-iq already present"
 else
-  warn "NEXUSIQ_VENDOR_AEON not set — attempting to clone AEON-IQ"
-  if git clone --depth 1 https://github.com/adaptiveliquidity/AEON-IQ.git "${ROOT_DIR}/vendor/aeon-iq" 2>/dev/null; then
-    ok "cloned AEON-IQ into vendor/aeon-iq"
+  warn "NEXUSIQ_VENDOR_AEON not set — cloning AEON-IQ from GitHub"
+  # Pinned to a known-good AEON-IQ commit for reproducible installs (bump
+  # deliberately, together with the VERSION_MATRIX row). Includes the
+  # two-stage ANN retrieval fix, RMK reward loop, sensitivity enforcement,
+  # and Ed25519 evidence counter-signing.
+  AEON_PIN="${NEXUSIQ_AEON_REF:-76f09b4}"
+  if git clone --filter=blob:none https://github.com/adaptiveliquidity/AEON-IQ.git "${ROOT_DIR}/vendor/aeon-iq" 2>/dev/null        && git -C "${ROOT_DIR}/vendor/aeon-iq" checkout --quiet "${AEON_PIN}"; then
+    ok "cloned AEON-IQ into vendor/aeon-iq (pinned ${AEON_PIN})"
   else
     err "Could not clone AEON-IQ (the repository may be private or the URL unknown)."
     err "Set NEXUSIQ_VENDOR_AEON to your local AEON-IQ checkout and re-run, e.g.:"

@@ -125,6 +125,15 @@ else
   warn "NEXUS_AEON_HMAC_KEY already set — left unchanged"
 fi
 
+# AEON_EVIDENCE_SIGNING_KEY: Ed25519 seed (32 bytes / 64 hex chars) AEON-IQ
+# uses to counter-sign memory-search evidence. The matching PUBLIC verifying
+# key is read after the stack is up:
+#   curl -s -H "X-Management-Key: $MANAGEMENT_API_KEY" \
+#     http://127.0.0.1:8080/api/v1/evidence/verifying-key
+# and pinned as NEXUS_AEON_VERIFYING_KEY (then restart the nexus services).
+# Verification is off until the verifying key is pinned.
+ensure_secret AEON_EVIDENCE_SIGNING_KEY 32
+
 # Cross-wire: NEXUS_AEON_MANAGEMENT_KEY MUST equal MANAGEMENT_API_KEY.
 mgmt_val="$(get_val MANAGEMENT_API_KEY)"
 if [[ -z "$mgmt_val" ]]; then

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Shell + compose lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck all kit scripts
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+          # Severity gate: real errors block; style/info findings do not.
+          shellcheck -S error -e SC1091 \
+            install.sh start.sh stop.sh restart.sh reset.sh uninstall.sh \
+            doctor.sh logs.sh connect-mcp.sh generate-mcp-config.sh \
+            run-live-example.sh verify-live-stack.sh scripts/*.sh
+
+      - name: bash -n every script
+        run: |
+          for f in *.sh scripts/*.sh; do bash -n "$f"; done
+
+      - name: docker compose config validates
+        run: |
+          cp .env.example .env
+          # compose config only needs the vars to exist, not be real secrets.
+          ./scripts/generate-secrets.sh
+          docker compose config --quiet
+          echo "compose model OK"
+
+  smoke:
+    # Full from-source install smoke (long: Rust builds). Manual or nightly
+    # only — never a required PR gate.
+    name: Install smoke (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install + start + doctor
+        run: |
+          cp .env.example .env
+          ./install.sh
+          ./start.sh
+          ./doctor.sh || true # provider key absent in CI; doctor warns
