@@ -52,13 +52,27 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: install + start + doctor
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           cp .env.example .env
+          # scripts/validate-env.sh hard-fails when UPSTREAM_PROVIDER=openai has
+          # no OPENAI_API_KEY, so install.sh cannot even reach the build without
+          # one -- including for the pure-Nexus paths that need no provider.
+          # Use the real secret when configured; otherwise a clearly-fake
+          # placeholder that unblocks validation but is never presented as
+          # working provider coverage (see the memory-recall step below).
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=${OPENAI_API_KEY}|" .env
+          else
+            echo "::warning title=No provider key::Using a placeholder OPENAI_API_KEY so env validation passes. Only keyless paths (nexus-execute, proof-capsule, timeline) are covered by this run; embedding-backed recall is NOT."
+            sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=ci-placeholder-not-a-real-key|" .env
+          fi
           # install.sh runs scripts/generate-secrets.sh itself (idempotent),
           # which provisions MANAGEMENT_API_KEY for the smokes below.
           ./install.sh
           ./start.sh
-          ./doctor.sh || true # provider key absent in CI; doctor warns
+          ./doctor.sh || true # placeholder provider key in CI; doctor warns
 
       # Key-free smokes are hard gates: they exercise the pure Nexus execution
       # path and must pass without any provider credentials.
@@ -79,11 +93,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::warning title=Skipped::smoke-memory-recall.sh SKIPPED — no OPENAI_API_KEY secret configured. Embedding-backed recall is NOT covered by this run."
+            echo "::warning title=Skipped::smoke-memory-recall.sh SKIPPED — no OPENAI_API_KEY secret configured (the stack is running on a placeholder key). Embedding-backed recall is NOT covered by this run."
             exit 0
           fi
-          sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=${OPENAI_API_KEY}|" .env
-          ./restart.sh
+          # The real key was already written to .env before install, so the
+          # running stack is already using it -- no restart needed.
           ./scripts/smoke-memory-recall.sh
 
       - name: stack logs on failure
