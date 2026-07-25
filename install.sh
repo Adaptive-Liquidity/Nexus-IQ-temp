@@ -289,7 +289,10 @@ if [[ -f "$SAMPLE_WASM" ]]; then
 else
   # Minimal noop module:
   #   (module (memory (export "memory") 1) (func (export "_start")))
-  WASM_B64='AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEQIGbWVtb3J5AgAGX3N0YXJ0AAAKBAECAAsACgRuYW1lAgMBAAA='
+  # NOTE: export-section length byte is 0x13 (19). An earlier revision used
+  # 0x11 (17), which truncated the section before `_start`'s kind+index bytes,
+  # so the module failed to parse (INVALID_MODULE) at execution time.
+  WASM_B64='AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAAKBAECAAsACgRuYW1lAgMBAAA='
   if printf '%s' "$WASM_B64" | base64 -d > "$SAMPLE_WASM" 2>/dev/null; then
     ok "baked data/modules/sample_tool.wasm"
   else
