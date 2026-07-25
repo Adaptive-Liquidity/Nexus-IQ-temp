@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The `smoke` job below is gated on these two events. Without them declared
+  # here, its `if:` condition can never be true and the job never runs.
+  workflow_dispatch:
+  schedule:
+    # Nightly at 06:00 UTC — matches the job's "manual or nightly" intent.
+    - cron: '0 6 * * *'
 
 jobs:
   lint:
@@ -37,14 +43,55 @@ jobs:
   smoke:
     # Full from-source install smoke (long: Rust builds). Manual or nightly
     # only — never a required PR gate.
-    name: Install smoke (manual)
-    if: github.event_name == 'workflow_dispatch'
+    name: Install smoke (manual/nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    # A from-source Rust build can hang; cap it rather than burn a 6h runner.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
       - name: install + start + doctor
         run: |
           cp .env.example .env
+          # install.sh runs scripts/generate-secrets.sh itself (idempotent),
+          # which provisions MANAGEMENT_API_KEY for the smokes below.
           ./install.sh
           ./start.sh
           ./doctor.sh || true # provider key absent in CI; doctor warns
+
+      # Key-free smokes are hard gates: they exercise the pure Nexus execution
+      # path and must pass without any provider credentials.
+      - name: smoke — nexus execute (no provider key required)
+        run: ./scripts/smoke-nexus-execute.sh
+
+      - name: smoke — proof capsule (no provider key required)
+        run: ./scripts/smoke-proof-capsule.sh
+
+      # Needs only MANAGEMENT_API_KEY, which generate-secrets.sh created above.
+      - name: smoke — timeline
+        run: ./scripts/smoke-timeline.sh
+
+      # Requires a real embedding provider. Skips loudly when absent — never
+      # report success for a check that did not run.
+      - name: smoke — memory recall (requires provider key)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::warning title=Skipped::smoke-memory-recall.sh SKIPPED — no OPENAI_API_KEY secret configured. Embedding-backed recall is NOT covered by this run."
+            exit 0
+          fi
+          sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=${OPENAI_API_KEY}|" .env
+          ./restart.sh
+          ./scripts/smoke-memory-recall.sh
+
+      - name: stack logs on failure
+        if: failure()
+        # NB: do not use ./logs.sh here — it runs `docker compose logs -f`
+        # (follow), which never returns and would hang the job until timeout.
+        run: docker compose logs --tail=200 --no-color
+
+      - name: stop stack
+        if: always()
+        run: ./stop.sh || true
