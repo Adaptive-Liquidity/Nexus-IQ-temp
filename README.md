@@ -143,8 +143,10 @@ Use `.env.example` or `.env.openai.example`. Set:
 
 ```
 UPSTREAM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
 ```
+
+Set `OPENAI_API_KEY` to a real OpenAI credential through your normal secret
+management process before enabling memory.
 
 Default models: `text-embedding-3-small` (1536 dimensions), `gpt-4o-mini` extractor. These are configured in `.env.openai.example`.
 
