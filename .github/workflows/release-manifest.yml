@@ -31,7 +31,8 @@ jobs:
             -e "s#\${NEXUS_IMAGE:-nexusiq-nexus:local}#ghcr.io/adaptiveliquidity/nexusiq-nexus:${TAG#v}#g" \
             -e "s#\${AEON_IQ_IMAGE:-nexusiq-aeon:local}#ghcr.io/adaptiveliquidity/aeon-iq:${TAG#v}#g" \
             "$MANIFEST"
-          grep -Fq '${MANAGEMENT_API_KEY}' "$MANIFEST"
+          grep -Fq '${MANAGEMENT_API_KEY:-}' "$MANIFEST"
+          grep -Fq '${NEXUS_AEON_HMAC_KEY:-}' "$MANIFEST"
           grep -Fq '${NEXUS_AGENTD_AUTH_TOKEN}' "$MANIFEST"
           if grep -Eq '(^|[[:space:]])(POSTGRES_PASSWORD|MANAGEMENT_API_KEY|NEXUS_AEON_HMAC_KEY|NEXUS_AGENTD_AUTH_TOKEN): x$' "$MANIFEST"; then
             echo "::error::release manifest contains known placeholder credentials"
