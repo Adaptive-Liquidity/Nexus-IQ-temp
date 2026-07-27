@@ -22,7 +22,7 @@ jobs:
       - name: Generate pinned manifest + checksums
         run: |
           mkdir -p release
-          TAG="${GITHUB_REF_NAME}"
+          TAG="$(./scripts/validate-release-tag.sh "${GITHUB_REF_NAME}")"
           # Resolve only release image refs. Runtime secrets remain environment
           # references instead of known literal values.
           MANIFEST="release/docker-compose.${TAG}.pinned.yml"

@@ -33,6 +33,9 @@ jobs:
             bash -n "$file"
           done
 
+      - name: release-tag safety contracts
+        run: ./tests/release-tag.sh
+
       - name: runtime-mode and validator contracts
         run: ./tests/keyless-mode.sh
 
