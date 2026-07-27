@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+#
+# Deterministic contract tests for the keyless/core runtime-mode resolver and
+# conditional environment validation. No provider credential is created.
+#
+set -euo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+PASSES=0
+FAILURES=0
+
+pass() {
+  printf 'PASS %s\n' "$1"
+  PASSES=$((PASSES + 1))
+}
+
+fail() {
+  printf 'FAIL %s\n' "$1" >&2
+  FAILURES=$((FAILURES + 1))
+}
+
+assert_success() {
+  local name="$1"
+  shift
+  if "$@" >"${TMP_DIR}/stdout" 2>"${TMP_DIR}/stderr"; then
+    pass "$name"
+  else
+    fail "$name"
+    sed 's/^/  /' "${TMP_DIR}/stderr" >&2
+  fi
+}
+
+assert_failure_matching() {
+  local name="$1" pattern="$2"
+  shift 2
+  if "$@" >"${TMP_DIR}/stdout" 2>"${TMP_DIR}/stderr"; then
+    fail "${name} (unexpected success)"
+  elif grep -Eiq -- "$pattern" "${TMP_DIR}/stdout" "${TMP_DIR}/stderr"; then
+    pass "$name"
+  else
+    fail "${name} (missing diagnostic matching: ${pattern})"
+    sed 's/^/  /' "${TMP_DIR}/stderr" >&2
+  fi
+}
+
+write_env() {
+  local destination="$1"
+  shift
+  printf '%s\n' "$@" >"$destination"
+}
+
+resolver_output_is() {
+  local env_file="$1" expected="$2" warning_pattern="${3:-}"
+  local output
+  if ! output="$(bash "${ROOT_DIR}/scripts/runtime-mode.sh" "$env_file" 2>"${TMP_DIR}/resolver-stderr")"; then
+    return 1
+  fi
+  [[ "$output" == "$expected" ]] || return 1
+  if [[ -n "$warning_pattern" ]]; then
+    grep -Eiq -- "$warning_pattern" "${TMP_DIR}/resolver-stderr"
+  else
+    [[ ! -s "${TMP_DIR}/resolver-stderr" ]]
+  fi
+}
+
+run_validator() {
+  local env_file="$1" isolated="${TMP_DIR}/validator-$RANDOM"
+  mkdir -p "${isolated}/scripts"
+  cp "${ROOT_DIR}/scripts/validate-env.sh" "${isolated}/scripts/validate-env.sh"
+  sed -i 's/\r$//' "${isolated}/scripts/validate-env.sh"
+  if [[ -f "${ROOT_DIR}/scripts/runtime-mode.sh" ]]; then
+    cp "${ROOT_DIR}/scripts/runtime-mode.sh" "${isolated}/scripts/runtime-mode.sh"
+    sed -i 's/\r$//' "${isolated}/scripts/runtime-mode.sh"
+  fi
+  cp "$env_file" "${isolated}/.env"
+  bash "${isolated}/scripts/validate-env.sh"
+}
+
+TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+MGMT='abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
+HMAC='1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+
+FALSE_ENV="${TMP_DIR}/false.env"
+write_env "$FALSE_ENV" \
+  'NEXUS_AEON_ENABLED=FaLsE' \
+  "NEXUS_AGENTD_AUTH_TOKEN=${TOKEN}" \
+  'ALLOW_UNAUTH_MANAGEMENT=false'
+assert_success "explicit false is memory-disabled, case-insensitive" \
+  resolver_output_is "$FALSE_ENV" disabled
+
+TRUE_ENV="${TMP_DIR}/true.env"
+write_env "$TRUE_ENV" \
+  'NEXUS_AEON_ENABLED=TRUE'
+assert_success "explicit true is memory-enabled, case-insensitive" \
+  resolver_output_is "$TRUE_ENV" enabled
+
+LEGACY_ENV="${TMP_DIR}/legacy.env"
+write_env "$LEGACY_ENV" \
+  "NEXUS_AGENTD_AUTH_TOKEN=${TOKEN}"
+assert_success "absent mode is legacy-enabled with a visible warning" \
+  resolver_output_is "$LEGACY_ENV" enabled 'absent|legacy|explicit'
+
+for malformed in '' yes 1 enabled off; do
+  MALFORMED_ENV="${TMP_DIR}/malformed-${malformed:-empty}.env"
+  write_env "$MALFORMED_ENV" "NEXUS_AEON_ENABLED=${malformed}"
+  assert_failure_matching "malformed mode '${malformed:-empty}' is rejected" \
+    'NEXUS_AEON_ENABLED.*(true|false|invalid|empty)' \
+    bash "${ROOT_DIR}/scripts/runtime-mode.sh" "$MALFORMED_ENV"
+done
+
+PROVIDER_CONFIG_ENV="${TMP_DIR}/provider-config.env"
+write_env "$PROVIDER_CONFIG_ENV" \
+  'NEXUS_AEON_ENABLED=false' \
+  'UPSTREAM_PROVIDER=ollama' \
+  'UPSTREAM_BASE_URL=http://127.0.0.1:11434' \
+  'OPENAI_API_KEY='
+assert_success "provider configuration presence does not auto-enable memory" \
+  resolver_output_is "$PROVIDER_CONFIG_ENV" disabled
+
+assert_success "disabled validation needs only the execution-plane token" \
+  run_validator "$FALSE_ENV"
+if grep -Eiq 'memory.*disabled' "${TMP_DIR}/stdout"; then
+  pass "disabled validator verdict is mode-specific"
+else
+  fail "disabled validator verdict is mode-specific"
+fi
+if ! grep -Eiq 'provider key OK' "${TMP_DIR}/stdout" "${TMP_DIR}/stderr"; then
+  pass "disabled validator does not claim provider-key success"
+else
+  fail "disabled validator does not claim provider-key success"
+fi
+
+ENABLED_MISSING_PROVIDER="${TMP_DIR}/enabled-missing-provider.env"
+write_env "$ENABLED_MISSING_PROVIDER" \
+  'NEXUS_AEON_ENABLED=true' \
+  "POSTGRES_PASSWORD=${TOKEN}" \
+  "MANAGEMENT_API_KEY=${MGMT}" \
+  "NEXUS_AEON_MANAGEMENT_KEY=${MGMT}" \
+  "NEXUS_AEON_HMAC_KEY=${HMAC}" \
+  "NEXUS_AGENTD_AUTH_TOKEN=${TOKEN}" \
+  'ALLOW_UNAUTH_MANAGEMENT=false' \
+  'UPSTREAM_PROVIDER=openai' \
+  'OPENAI_API_KEY='
+assert_failure_matching "enabled validation fails closed without its provider" \
+  'openai.*OPENAI_API_KEY|OPENAI_API_KEY.*required' \
+  run_validator "$ENABLED_MISSING_PROVIDER"
+
+ENABLED_COMPLETE="${TMP_DIR}/enabled-complete.env"
+write_env "$ENABLED_COMPLETE" \
+  'NEXUS_AEON_ENABLED=true' \
+  "POSTGRES_PASSWORD=${TOKEN}" \
+  "MANAGEMENT_API_KEY=${MGMT}" \
+  "NEXUS_AEON_MANAGEMENT_KEY=${MGMT}" \
+  "NEXUS_AEON_HMAC_KEY=${HMAC}" \
+  "NEXUS_AGENTD_AUTH_TOKEN=${TOKEN}" \
+  'ALLOW_UNAUTH_MANAGEMENT=false' \
+  'UPSTREAM_PROVIDER=ollama' \
+  'UPSTREAM_BASE_URL=http://127.0.0.1:11434'
+assert_success "enabled validation accepts complete Ollama configuration without a fake key" \
+  run_validator "$ENABLED_COMPLETE"
+if grep -Eiq 'memory.*enabled' "${TMP_DIR}/stdout"; then
+  pass "enabled validator verdict is mode-specific"
+else
+  fail "enabled validator verdict is mode-specific"
+fi
+
+LEGACY_COMPLETE="${TMP_DIR}/legacy-complete.env"
+grep -v '^NEXUS_AEON_ENABLED=' "$ENABLED_COMPLETE" >"$LEGACY_COMPLETE"
+assert_success "legacy absent mode retains full-memory validation" \
+  run_validator "$LEGACY_COMPLETE"
+if grep -Eiq 'absent|legacy|explicit' "${TMP_DIR}/stderr"; then
+  pass "legacy validation emits the compatibility warning"
+else
+  fail "legacy validation emits the compatibility warning"
+fi
+
+MISMATCH_ENV="${TMP_DIR}/mismatch.env"
+cp "$ENABLED_COMPLETE" "$MISMATCH_ENV"
+sed -i 's/^NEXUS_AEON_MANAGEMENT_KEY=.*/NEXUS_AEON_MANAGEMENT_KEY=wrong/' "$MISMATCH_ENV"
+assert_failure_matching "enabled mode preserves management-key cross-wiring" \
+  'cross-wired|must equal|mismatch' run_validator "$MISMATCH_ENV"
+
+SHORT_HMAC_ENV="${TMP_DIR}/short-hmac.env"
+cp "$ENABLED_COMPLETE" "$SHORT_HMAC_ENV"
+sed -i 's/^NEXUS_AEON_HMAC_KEY=.*/NEXUS_AEON_HMAC_KEY=abcd/' "$SHORT_HMAC_ENV"
+assert_failure_matching "enabled mode preserves HMAC validation" \
+  'HMAC.*(64|32 bytes|too short)' run_validator "$SHORT_HMAC_ENV"
+
+UNAUTH_ENV="${TMP_DIR}/unauth.env"
+cp "$FALSE_ENV" "$UNAUTH_ENV"
+sed -i 's/^ALLOW_UNAUTH_MANAGEMENT=.*/ALLOW_UNAUTH_MANAGEMENT=true/' "$UNAUTH_ENV"
+assert_failure_matching "core mode never permits unauthenticated management flags" \
+  'ALLOW_UNAUTH_MANAGEMENT.*(forbidden|NOT be true|must.*false)' \
+  run_validator "$UNAUTH_ENV"
+
+MOCK_ENV="${TMP_DIR}/mock.env"
+cp "$FALSE_ENV" "$MOCK_ENV"
+printf '%s\n' 'MOCK_PROVIDER=true' >>"$MOCK_ENV"
+assert_failure_matching "core mode preserves mock/test flag prohibition" \
+  'mock/test.*not allowed|MOCK_PROVIDER' run_validator "$MOCK_ENV"
+
+printf '\n%d passed; %d failed\n' "$PASSES" "$FAILURES"
+[[ "$FAILURES" -eq 0 ]]
