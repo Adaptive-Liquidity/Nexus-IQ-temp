@@ -102,12 +102,12 @@ if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
         fail "UPSTREAM_PROVIDER=openai requires OPENAI_API_KEY to be set"
       ;;
     anthropic)
-      [[ -z "$(v OPENAI_API_KEY)" ]] &&
-        fail "UPSTREAM_PROVIDER=anthropic requires the kit provider credential OPENAI_API_KEY to be set"
+      [[ -z "$(v ANTHROPIC_API_KEY)" ]] &&
+        fail "UPSTREAM_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set"
       ;;
     gemini)
-      [[ -z "$(v OPENAI_API_KEY)" ]] &&
-        fail "UPSTREAM_PROVIDER=gemini requires the kit provider credential OPENAI_API_KEY to be set"
+      [[ -z "$(v GEMINI_API_KEY)" ]] &&
+        fail "UPSTREAM_PROVIDER=gemini requires GEMINI_API_KEY to be set"
       ;;
     ollama)
       [[ -z "$(v UPSTREAM_BASE_URL)" ]] &&

@@ -159,6 +159,18 @@ assert_failure_matching "enabled validation fails closed without its provider" \
   'openai.*OPENAI_API_KEY|OPENAI_API_KEY.*required' \
   run_validator "$ENABLED_MISSING_PROVIDER"
 
+ANTHROPIC_MISSING_PROVIDER="${TMP_DIR}/anthropic-missing-provider.env"
+sed 's/^UPSTREAM_PROVIDER=.*/UPSTREAM_PROVIDER=anthropic/' \
+  "$ENABLED_MISSING_PROVIDER" >"$ANTHROPIC_MISSING_PROVIDER"
+assert_failure_matching "enabled Anthropic mode preserves its named-key requirement" \
+  'anthropic.*ANTHROPIC_API_KEY|ANTHROPIC_API_KEY.*required' run_validator "$ANTHROPIC_MISSING_PROVIDER"
+
+GEMINI_MISSING_PROVIDER="${TMP_DIR}/gemini-missing-provider.env"
+sed 's/^UPSTREAM_PROVIDER=.*/UPSTREAM_PROVIDER=gemini/' \
+  "$ENABLED_MISSING_PROVIDER" >"$GEMINI_MISSING_PROVIDER"
+assert_failure_matching "enabled Gemini mode preserves its named-key requirement" \
+  'gemini.*GEMINI_API_KEY|GEMINI_API_KEY.*required' run_validator "$GEMINI_MISSING_PROVIDER"
+
 ENABLED_COMPLETE="${TMP_DIR}/enabled-complete.env"
 write_env "$ENABLED_COMPLETE" \
   'NEXUS_AEON_ENABLED=true' \
