@@ -21,6 +21,7 @@ ENV_FILE="${ROOT_DIR}/.env"
 # shellcheck source=scripts/runtime-mode.sh
 source "${ROOT_DIR}/scripts/runtime-mode.sh"
 nexusiq_resolve_runtime_mode "$ENV_FILE"
+export NEXUS_AEON_ENABLED="$NEXUSIQ_AEON_ENABLED_NORMALIZED"
 
 banner "Doctor — required live health gate"
 if ! bash "${ROOT_DIR}/doctor.sh"; then

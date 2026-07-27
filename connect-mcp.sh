@@ -23,6 +23,19 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
   log "       Set NEXUSIQ_SELFHOST_DIR to the absolute NexusIQ kit path."
   exit 1
 fi
+ENV_FILE="${NEXUSIQ_SELFHOST_DIR%/}/.env"
+MODE_RESOLVER="${NEXUSIQ_SELFHOST_DIR%/}/scripts/runtime-mode.sh"
+if [[ ! -f "$ENV_FILE" || ! -f "$MODE_RESOLVER" ]]; then
+  log "FATAL: .env or scripts/runtime-mode.sh is missing. Run ./install.sh."
+  exit 1
+fi
+# shellcheck source=scripts/runtime-mode.sh
+source "$MODE_RESOLVER"
+if ! nexusiq_resolve_runtime_mode "$ENV_FILE"; then
+  log "FATAL: invalid runtime mode configuration."
+  exit 1
+fi
+export NEXUS_AEON_ENABLED="$NEXUSIQ_AEON_ENABLED_NORMALIZED"
 if ! command -v docker >/dev/null 2>&1; then
   log "FATAL: docker not found on PATH."
   exit 1

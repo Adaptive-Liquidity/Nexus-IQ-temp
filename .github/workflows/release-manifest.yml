@@ -26,7 +26,7 @@ jobs:
           AEON_IQ_IMAGE="ghcr.io/adaptiveliquidity/aeon-iq:${TAG#v}" \
           POSTGRES_USER=x POSTGRES_PASSWORD=x POSTGRES_DB=x \
           MANAGEMENT_API_KEY=x NEXUS_AEON_HMAC_KEY=x NEXUS_AGENTD_AUTH_TOKEN=x \
-            docker compose config > "release/docker-compose.${TAG}.pinned.yml"
+            docker compose --profile memory --profile tools config > "release/docker-compose.${TAG}.pinned.yml"
           # Kit source checksums.
           find . -maxdepth 2 -type f \( -name "*.sh" -o -name "docker-compose.yml" -o -name "Dockerfile*" \) \
             -not -path "./release/*" -print0 | sort -z | xargs -0 sha256sum > "release/SHA256SUMS.${TAG}"

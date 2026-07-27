@@ -28,6 +28,7 @@ fi
 # shellcheck source=scripts/runtime-mode.sh
 source "${ROOT_DIR}/scripts/runtime-mode.sh"
 nexusiq_resolve_runtime_mode "$ENV_FILE"
+export NEXUS_AEON_ENABLED="$NEXUSIQ_AEON_ENABLED_NORMALIZED"
 
 # Fail before stopping or starting any container.
 bash "${ROOT_DIR}/scripts/validate-env.sh"

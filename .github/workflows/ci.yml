@@ -5,106 +5,155 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # The `smoke` job below is gated on these two events. Without them declared
-  # here, its `if:` condition can never be true and the job never runs.
   workflow_dispatch:
   schedule:
-    # Nightly at 06:00 UTC — matches the job's "manual or nightly" intent.
     - cron: '0 6 * * *'
 
 jobs:
   lint:
-    name: Shell + compose lint
+    name: Shell, mode, and compose contracts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: shellcheck all kit scripts
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q shellcheck
-          # Severity gate: real errors block; style/info findings do not.
+          sudo apt-get update -q
+          sudo apt-get install -y -q shellcheck
           shellcheck -S error -e SC1091 \
             install.sh start.sh stop.sh restart.sh reset.sh uninstall.sh \
             doctor.sh logs.sh connect-mcp.sh generate-mcp-config.sh \
-            run-live-example.sh verify-live-stack.sh scripts/*.sh
+            run-live-example.sh verify-live-stack.sh scripts/*.sh tests/*.sh
 
-      - name: bash -n every script
+      - name: bash syntax
         run: |
-          for f in *.sh scripts/*.sh; do bash -n "$f"; done
+          for file in *.sh scripts/*.sh tests/*.sh; do
+            bash -n "$file"
+          done
 
-      - name: docker compose config validates
+      - name: runtime-mode and validator contracts
+        run: ./tests/keyless-mode.sh
+
+      - name: installer decision contracts
+        run: ./tests/install-decisions.sh
+
+      - name: compose profile contracts
         run: |
+          ./tests/compose-profiles.sh
           cp .env.example .env
-          # compose config only needs the vars to exist, not be real secrets.
           ./scripts/generate-secrets.sh
           docker compose config --quiet
-          echo "compose model OK"
+          docker compose --profile tools config --quiet
+          docker compose --profile memory --profile tools config --quiet
+          echo "default, tools, and memory+tools compose models OK"
 
   smoke:
-    # Full from-source install smoke (long: Rust builds). Manual or nightly
-    # only — never a required PR gate.
-    name: Install smoke (manual/nightly)
+    # Full from-source Nexus build. Manual/nightly because compiling the pinned
+    # product source is intentionally too expensive for every PR.
+    name: Keyless source install smoke (manual/nightly)
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    # A from-source Rust build can hang; cap it rather than burn a 6h runner.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: install + start + doctor
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: install (fresh keyless source flow)
         run: |
-          cp .env.example .env
-          # scripts/validate-env.sh hard-fails when UPSTREAM_PROVIDER=openai has
-          # no OPENAI_API_KEY, so install.sh cannot even reach the build without
-          # one -- including for the pure-Nexus paths that need no provider.
-          # Use the real secret when configured; otherwise a clearly-fake
-          # placeholder that unblocks validation but is never presented as
-          # working provider coverage (see the memory-recall step below).
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=${OPENAI_API_KEY}|" .env
-          else
-            echo "::warning title=No provider key::Using a placeholder OPENAI_API_KEY so env validation passes. Only keyless paths (nexus-execute, proof-capsule, timeline) are covered by this run; embedding-backed recall is NOT."
-            sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=ci-placeholder-not-a-real-key|" .env
+          test ! -e .env
+          env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u GEMINI_API_KEY \
+            ./install.sh
+          grep -qx 'NEXUS_AEON_ENABLED=false' .env
+          if grep -Eq '^(OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY)=.+' .env; then
+            echo "::error::install wrote a provider credential"
+            exit 1
           fi
-          # install.sh runs scripts/generate-secrets.sh itself (idempotent),
-          # which provisions MANAGEMENT_API_KEY for the smokes below.
-          ./install.sh
-          ./start.sh
-          ./doctor.sh || true # placeholder provider key in CI; doctor warns
+          test ! -e vendor/aeon-iq
+          test -e vendor/nexus
+          test -s data/modules/sample_tool.wasm
 
-      # Key-free smokes are hard gates: they exercise the pure Nexus execution
-      # path and must pass without any provider credentials.
-      - name: smoke — nexus execute (no provider key required)
+      - name: start (Nexus-only service set)
+        run: |
+          ./start.sh
+          running="$(docker compose --profile memory ps --status running --services)"
+          grep -qx 'nexus-agentd' <<<"$running"
+          if grep -Eq '^(postgres|aeon|aeon-worker)$' <<<"$running"; then
+            echo "::error::memory service running in keyless mode"
+            exit 1
+          fi
+
+      - name: doctor (memory disabled is healthy)
+        run: |
+          ./doctor.sh | tee doctor.out
+          grep -Fq 'memory plane disabled by configuration' doctor.out
+          ! grep -Eiq '(memory recall|memory write).*(PASS|passed)' doctor.out
+
+      - name: smoke — Nexus MCP execution surface
         run: ./scripts/smoke-nexus-execute.sh
 
-      - name: smoke — proof capsule (no provider key required)
-        run: ./scripts/smoke-proof-capsule.sh
+      - name: smoke — WASM execution and Proof Capsule
+        run: |
+          before="$(find data/proofs -type f | wc -l)"
+          ./scripts/smoke-proof-capsule.sh
+          after="$(find data/proofs -type f | wc -l)"
+          test "$after" -gt "$before"
 
-      # Needs only MANAGEMENT_API_KEY, which generate-secrets.sh created above.
-      - name: smoke — timeline
-        run: ./scripts/smoke-timeline.sh
+      - name: verify selected live stack
+        run: |
+          ./verify-live-stack.sh | tee verify.out
+          grep -Fq 'Nexus execution/proof plane verified; memory intentionally disabled.' verify.out
+          ! grep -Eiq '(memory recall|memory write).*(PASS|passed)' verify.out
 
-      # Requires a real embedding provider. Skips loudly when absent — never
-      # report success for a check that did not run.
-      - name: smoke — memory recall (requires provider key)
+      - name: optional full-memory and transition coverage
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::warning title=Skipped::smoke-memory-recall.sh SKIPPED — no OPENAI_API_KEY secret configured (the stack is running on a placeholder key). Embedding-backed recall is NOT covered by this run."
+            echo "::warning title=Full-memory coverage not run::No real OPENAI_API_KEY secret is configured. Keyless coverage passed; memory coverage is not reported as successful."
             exit 0
           fi
-          # The real key was already written to .env before install, so the
-          # running stack is already using it -- no restart needed.
-          ./scripts/smoke-memory-recall.sh
+
+          KEY=OPENAI_API_KEY VALUE="$OPENAI_API_KEY" awk '
+            BEGIN { key = ENVIRON["KEY"]; value = ENVIRON["VALUE"] }
+            $0 ~ "^" key "=" { print key "=" value; found = 1; next }
+            { print }
+            END { if (!found) print key "=" value }
+          ' .env >.env.next
+          mv .env.next .env
+          sed -i 's/^NEXUS_AEON_ENABLED=.*/NEXUS_AEON_ENABLED=true/' .env
+
+          ./install.sh
+          ./start.sh
+          ./doctor.sh
+          ./verify-live-stack.sh
+
+          postgres_id="$(docker compose --profile memory ps -q postgres)"
+          volume_name="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$postgres_id")"
+          test -n "$volume_name"
+
+          # enabled -> disabled: stop memory services, preserve the data volume,
+          # and keep the Nexus execution plane healthy.
+          sed -i 's/^NEXUS_AEON_ENABLED=.*/NEXUS_AEON_ENABLED=false/' .env
+          ./start.sh
+          test -z "$(docker compose --profile memory ps --status running -q postgres aeon aeon-worker)"
+          docker volume inspect "$volume_name" >/dev/null
+          ./scripts/smoke-nexus-execute.sh
+          ./scripts/smoke-proof-capsule.sh
+
+          # disabled -> enabled: the same configured memory volume returns.
+          sed -i 's/^NEXUS_AEON_ENABLED=.*/NEXUS_AEON_ENABLED=true/' .env
+          ./start.sh
+          new_postgres_id="$(docker compose --profile memory ps -q postgres)"
+          new_volume_name="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$new_postgres_id")"
+          test "$new_volume_name" = "$volume_name"
+          ./verify-live-stack.sh
 
       - name: stack logs on failure
         if: failure()
-        # NB: do not use ./logs.sh here — it runs `docker compose logs -f`
-        # (follow), which never returns and would hang the job until timeout.
-        run: docker compose logs --tail=200 --no-color
+        run: docker compose --profile memory --profile tools logs --tail=200 --no-color
 
       - name: stop stack
         if: always()

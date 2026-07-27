@@ -66,6 +66,13 @@ resolver_output_is() {
   fi
 }
 
+resolver_normalized_is() {
+  local env_file="$1" expected="$2"
+  # shellcheck source=scripts/runtime-mode.sh
+  source "${ROOT_DIR}/scripts/runtime-mode.sh"
+  nexusiq_resolve_runtime_mode "$env_file" >/dev/null
+  [[ "$NEXUSIQ_AEON_ENABLED_NORMALIZED" == "$expected" ]]
+}
 run_validator() {
   local env_file="$1" isolated="${TMP_DIR}/validator-$RANDOM"
   mkdir -p "${isolated}/scripts"
@@ -90,12 +97,16 @@ write_env "$FALSE_ENV" \
   'ALLOW_UNAUTH_MANAGEMENT=false'
 assert_success "explicit false is memory-disabled, case-insensitive" \
   resolver_output_is "$FALSE_ENV" disabled
+assert_success "case-insensitive false is canonicalized for Compose" 
+  resolver_normalized_is "$FALSE_ENV" false
 
 TRUE_ENV="${TMP_DIR}/true.env"
 write_env "$TRUE_ENV" \
   'NEXUS_AEON_ENABLED=TRUE'
 assert_success "explicit true is memory-enabled, case-insensitive" \
   resolver_output_is "$TRUE_ENV" enabled
+assert_success "case-insensitive true is canonicalized for Compose" 
+  resolver_normalized_is "$TRUE_ENV" true
 
 LEGACY_ENV="${TMP_DIR}/legacy.env"
 write_env "$LEGACY_ENV" \

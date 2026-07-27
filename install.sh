@@ -135,6 +135,7 @@ ok "recorded host identity in .env (NEXUSIQ_UID/NEXUSIQ_GID)"
 # shellcheck source=scripts/runtime-mode.sh
 source "${ROOT_DIR}/scripts/runtime-mode.sh"
 nexusiq_resolve_runtime_mode "${ROOT_DIR}/.env"
+export NEXUS_AEON_ENABLED="$NEXUSIQ_AEON_ENABLED_NORMALIZED"
 ok "selected runtime mode: memory ${NEXUSIQ_MEMORY_MODE}"
 
 finish_install() {

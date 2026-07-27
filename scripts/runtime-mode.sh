@@ -15,6 +15,7 @@ declare -gA NEXUSIQ_ENV=()
 declare -gA NEXUSIQ_ENV_OCCURRENCES=()
 NEXUSIQ_MEMORY_MODE=""
 NEXUSIQ_MEMORY_MODE_EXPLICIT=""
+NEXUSIQ_AEON_ENABLED_NORMALIZED=""
 
 nexusiq_mode_error() {
   printf 'runtime-mode: %s\n' "$*" >&2
@@ -78,6 +79,7 @@ nexusiq_resolve_runtime_mode() {
   if [[ "$occurrences" -eq 0 ]]; then
     NEXUSIQ_MEMORY_MODE="enabled"
     NEXUSIQ_MEMORY_MODE_EXPLICIT="false"
+    NEXUSIQ_AEON_ENABLED_NORMALIZED="true"
     nexusiq_mode_warn "NEXUS_AEON_ENABLED is absent; enabling memory for backward compatibility. Set NEXUS_AEON_ENABLED=true or false explicitly."
     return 0
   fi
@@ -93,10 +95,12 @@ nexusiq_resolve_runtime_mode() {
     true)
       NEXUSIQ_MEMORY_MODE="enabled"
       NEXUSIQ_MEMORY_MODE_EXPLICIT="true"
+      NEXUSIQ_AEON_ENABLED_NORMALIZED="true"
       ;;
     false)
       NEXUSIQ_MEMORY_MODE="disabled"
       NEXUSIQ_MEMORY_MODE_EXPLICIT="true"
+      NEXUSIQ_AEON_ENABLED_NORMALIZED="false"
       ;;
     "")
       nexusiq_mode_error "NEXUS_AEON_ENABLED is empty; expected exactly true or false"
