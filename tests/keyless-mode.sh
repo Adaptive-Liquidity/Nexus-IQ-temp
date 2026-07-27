@@ -140,6 +140,41 @@ all_env_consumers_use_shared_parser() {
   done
 }
 
+disabled_start_stops_memory_before_validation_failure() {
+  local isolated="${TMP_DIR}/start-order"
+  local docker_log="${isolated}/docker.log"
+  mkdir -p "${isolated}/scripts" "${isolated}/bin"
+  cp "${ROOT_DIR}/start.sh" "${isolated}/start.sh"
+  cp "${ROOT_DIR}/scripts/runtime-mode.sh" "${isolated}/scripts/runtime-mode.sh"
+  cp "${ROOT_DIR}/scripts/validate-env.sh" "${isolated}/scripts/validate-env.sh"
+  sed -i 's/\r$//' \
+    "${isolated}/start.sh" \
+    "${isolated}/scripts/runtime-mode.sh" \
+    "${isolated}/scripts/validate-env.sh"
+  write_env "${isolated}/.env" \
+    'NEXUS_AEON_ENABLED=false' \
+    'ALLOW_UNAUTH_MANAGEMENT=false'
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'printf "%s\n" "$*" >>"$NEXUSIQ_DOCKER_LOG"' \
+    >"${isolated}/bin/docker"
+  chmod +x "${isolated}/bin/docker"
+
+  if (
+    cd "$isolated"
+    PATH="${isolated}/bin:${PATH}" \
+      NEXUSIQ_DOCKER_LOG="$docker_log" \
+      bash ./start.sh
+  ) >"${isolated}/stdout" 2>"${isolated}/stderr"; then
+    return 1
+  fi
+
+  grep -Fqx 'compose --profile memory stop aeon-worker aeon postgres' "$docker_log" &&
+    ! grep -Eq '(^| )up( |$)' "$docker_log" &&
+    grep -Eiq 'NEXUS_AGENTD_AUTH_TOKEN.*(missing|required)' \
+      "${isolated}/stdout" "${isolated}/stderr"
+}
+
 TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 MGMT='abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
 HMAC='1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
@@ -332,6 +367,9 @@ assert_success "secret generation treats a commented blank as empty" \
 
 assert_success "all memory and lifecycle consumers use the shared env parser" \
   all_env_consumers_use_shared_parser
+
+assert_success "disabled start stops memory before execution-plane validation fails" \
+  disabled_start_stops_memory_before_validation_failure
 
 printf '\n%d passed; %d failed\n' "$PASSES" "$FAILURES"
 [[ "$FAILURES" -eq 0 ]]

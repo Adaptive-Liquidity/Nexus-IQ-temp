@@ -30,7 +30,18 @@ source "${ROOT_DIR}/scripts/runtime-mode.sh"
 nexusiq_resolve_runtime_mode "$ENV_FILE"
 export NEXUS_AEON_ENABLED="$NEXUSIQ_AEON_ENABLED_NORMALIZED"
 
-# Fail before stopping or starting any container.
+if [[ "$NEXUSIQ_MEMORY_MODE" == "disabled" ]]; then
+  step "Stopping memory services disabled by configuration (volumes preserved)"
+  if ! compose --profile memory stop aeon-worker aeon postgres; then
+    err "Could not stop the disabled memory services."
+    exit 1
+  fi
+  ok "memory containers stopped; PostgreSQL volume preserved"
+fi
+
+# Fail before starting any container. In explicit core mode, disabled memory
+# services are stopped first so an unrelated execution-plane configuration
+# error cannot leave the memory plane running.
 bash "${ROOT_DIR}/scripts/validate-env.sh"
 
 if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
@@ -47,13 +58,6 @@ if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
     exit 1
   fi
 else
-  step "Stopping memory services disabled by configuration (volumes preserved)"
-  if ! compose --profile memory stop aeon-worker aeon postgres; then
-    err "Could not stop the disabled memory services."
-    exit 1
-  fi
-  ok "memory containers stopped; PostgreSQL volume preserved"
-
   step "Starting Nexus execution service only"
   if ! compose up -d --no-deps nexus-agentd; then
     err "nexus-agentd startup failed."
