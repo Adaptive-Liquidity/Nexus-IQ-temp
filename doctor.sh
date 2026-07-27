@@ -180,8 +180,8 @@ elif [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
   provider="$(printf '%s' "$(v UPSTREAM_PROVIDER)" | tr '[:upper:]' '[:lower:]')"
   case "$provider" in
     openai) provider_value="$(v OPENAI_API_KEY)" ;;
-    anthropic) provider_value="$(v OPENAI_API_KEY)" ;;
-    gemini) provider_value="$(v OPENAI_API_KEY)" ;;
+    anthropic) provider_value="$(v ANTHROPIC_API_KEY)" ;;
+    gemini) provider_value="$(v GEMINI_API_KEY)" ;;
     ollama) provider_value="$(v UPSTREAM_BASE_URL)" ;;
     *) provider_value="" ;;
   esac
