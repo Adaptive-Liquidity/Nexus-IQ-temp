@@ -19,6 +19,7 @@ services:
   # Internal only — deliberately NOT published to the host. Reach it from the
   # other services via the hostname `postgres` on the `nexusiq` network.
   postgres:
+    profiles: ["memory"]
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     mem_limit: 1g
@@ -42,6 +43,7 @@ services:
   # debian:bookworm-slim, EXPOSE 8080). Uses a prebuilt image when present,
   # otherwise builds from AEON_BUILD_CONTEXT.
   aeon:
+    profiles: ["memory"]
     image: ${AEON_IQ_IMAGE:-nexusiq-aeon:local}
     build:
       context: ${AEON_BUILD_CONTEXT:-./vendor/aeon-iq}
@@ -109,6 +111,7 @@ services:
   # outbox, RMK/AMP sweeps, and HNSW maintenance on its own (smaller)
   # connection budget. Serves /health + /metrics only; no host port.
   aeon-worker:
+    profiles: ["memory"]
     image: ${AEON_IQ_IMAGE:-nexusiq-aeon:local}
     build:
       context: ${AEON_BUILD_CONTEXT:-./vendor/aeon-iq}
@@ -165,9 +168,6 @@ services:
     cap_drop:
       - ALL
     pids_limit: 512
-    depends_on:
-      aeon:
-        condition: service_healthy
     command: ["nexus-agentd", "--socket", "/run/nexus/nexus-agentd.sock"]
     environment:
       # ── AEON memory client ──
@@ -223,9 +223,6 @@ services:
     cap_drop:
       - ALL
     pids_limit: 512
-    depends_on:
-      nexus-agentd:
-        condition: service_started
     environment:
       # ── AEON memory client (mirrors nexus-agentd) ──
       NEXUS_AEON_ENABLED: ${NEXUS_AEON_ENABLED:-true}

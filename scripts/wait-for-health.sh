@@ -1,44 +1,46 @@
 #!/usr/bin/env bash
 #
-# wait-for-health.sh — poll docker compose health until the core services are
-# healthy, or time out (~120s). Prints per-service status as it goes.
+# wait-for-health.sh — wait for an explicit, caller-selected service list.
 #
-# Core services: postgres, aeon, aeon-worker, nexus-agentd.
+# Usage:
+#   ./scripts/wait-for-health.sh nexus-agentd
+#   ./scripts/wait-for-health.sh postgres aeon aeon-worker
 #
-# aeon-worker matters here, not just cosmetically: with `aeon` pinned to
-# MEMORYOS_ROLE=proxy, EXTRACTION_OUTBOX_ENABLED defaults to true, so the
-# proxy *always* enqueues extraction jobs instead of running them inline —
-# only a MEMORYOS_ROLE=worker process drains that queue. If aeon-worker is
-# down, chat completions keep succeeding but no memory is ever persisted,
-# silently. Waiting on its healthcheck here means a broken worker fails
-# start.sh loudly instead of failing invisibly later.
 set -euo pipefail
 
-# ---- colored helpers --------------------------------------------------------
 if [[ -t 1 ]]; then
   C_GREEN=$'\033[32m'; C_RED=$'\033[31m'; C_YELLOW=$'\033[33m'; C_RESET=$'\033[0m'
 else
   C_GREEN=''; C_RED=''; C_YELLOW=''; C_RESET=''
 fi
-ok()   { printf '%s✓%s %s\n'  "$C_GREEN"  "$C_RESET" "$*"; }
-err()  { printf '%s✗%s %s\n'  "$C_RED"    "$C_RESET" "$*" >&2; }
-warn() { printf '%s⚠%s %s\n'  "$C_YELLOW" "$C_RESET" "$*"; }
+ok()   { printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+err()  { printf '%s✗%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+warn() { printf '%s⚠%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT_DIR"
 
-SERVICES=(postgres aeon aeon-worker nexus-agentd)
-TIMEOUT="${WAIT_TIMEOUT:-120}"   # seconds
-INTERVAL=3                       # seconds between polls
+if [[ "$#" -eq 0 ]]; then
+  err "No services requested. Pass an explicit service list."
+  exit 2
+fi
 
-# ---- compose wrapper --------------------------------------------------------
-compose() { docker compose "$@"; }
+SERVICES=("$@")
+for service in "${SERVICES[@]}"; do
+  case "$service" in
+    postgres|aeon|aeon-worker|nexus-agentd) ;;
+    *)
+      err "Unsupported health target: ${service}"
+      exit 2
+      ;;
+  esac
+done
 
-# ---- inspect health of one service ------------------------------------------
-# Echoes one of: healthy | unhealthy | starting | no-healthcheck | running |
-# exited | missing. Uses `docker inspect` on the service container so we get
-# the real Health.Status; falls back to State when there is no healthcheck.
+TIMEOUT="${WAIT_TIMEOUT:-120}"
+INTERVAL="${WAIT_INTERVAL:-3}"
+compose() { docker compose --profile memory --profile tools "$@"; }
+
 service_state() {
   local svc="$1" cid health state
   cid="$(compose ps -q "$svc" 2>/dev/null | head -n1 || true)"
@@ -53,18 +55,20 @@ service_state() {
     return
   fi
   case "$health" in
-    healthy)   printf 'healthy' ;;
+    healthy) printf 'healthy' ;;
     unhealthy) printf 'unhealthy' ;;
-    starting)  printf 'starting' ;;
+    starting) printf 'starting' ;;
     none)
-      # No healthcheck declared: treat a running container as ready.
-      if [[ "$state" == "running" ]]; then printf 'no-healthcheck'; else printf '%s' "$state"; fi
+      if [[ "$state" == "running" ]]; then
+        printf 'no-healthcheck'
+      else
+        printf '%s' "$state"
+      fi
       ;;
-    *)         printf '%s' "${state:-unknown}" ;;
+    *) printf '%s' "${state:-unknown}" ;;
   esac
 }
 
-# Is the given state considered "ready"?
 is_ready() {
   case "$1" in
     healthy|no-healthcheck) return 0 ;;
@@ -72,42 +76,37 @@ is_ready() {
   esac
 }
 
-echo "Waiting for services to become healthy (timeout ${TIMEOUT}s): ${SERVICES[*]}"
-
+echo "Waiting for services (timeout ${TIMEOUT}s): ${SERVICES[*]}"
 deadline=$(( $(date +%s) + TIMEOUT ))
 declare -A LAST
-for s in "${SERVICES[@]}"; do LAST["$s"]=""; done
+for service in "${SERVICES[@]}"; do
+  LAST["$service"]=""
+done
 
 while true; do
   all_ready=1
-  for svc in "${SERVICES[@]}"; do
-    st="$(service_state "$svc")"
-    if [[ "${LAST[$svc]}" != "$st" ]]; then
-      case "$st" in
-        healthy|no-healthcheck) ok   "${svc}: ${st}" ;;
-        unhealthy|exited|missing) err "${svc}: ${st}" ;;
-        *) warn "${svc}: ${st}" ;;
+  for service in "${SERVICES[@]}"; do
+    state="$(service_state "$service")"
+    if [[ "${LAST[$service]}" != "$state" ]]; then
+      case "$state" in
+        healthy|no-healthcheck) ok "${service}: ${state}" ;;
+        unhealthy|exited|missing) err "${service}: ${state}" ;;
+        *) warn "${service}: ${state}" ;;
       esac
-      LAST["$svc"]="$st"
+      LAST["$service"]="$state"
     fi
-    is_ready "$st" || all_ready=0
+    is_ready "$state" || all_ready=0
   done
 
   if [[ "$all_ready" -eq 1 ]]; then
-    echo
-    ok "All core services are healthy."
+    ok "Requested services are healthy: ${SERVICES[*]}"
     exit 0
   fi
 
   if [[ "$(date +%s)" -ge "$deadline" ]]; then
-    echo
     err "Timed out after ${TIMEOUT}s waiting for: ${SERVICES[*]}"
-    echo "Current status:"
     compose ps || true
-    echo
-    echo "Inspect logs with:  ./logs.sh <service>"
     exit 1
   fi
-
   sleep "$INTERVAL"
 done

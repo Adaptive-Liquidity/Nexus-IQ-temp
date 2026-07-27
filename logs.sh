@@ -13,4 +13,4 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 # Follow logs with a bounded backscroll. Any service args are passed through.
-exec docker compose logs -f --tail=200 "$@"
+exec docker compose --profile memory --profile tools logs -f --tail=200 "$@"

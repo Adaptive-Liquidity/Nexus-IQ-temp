@@ -19,7 +19,7 @@ cd "$ROOT_DIR"
 compose() { docker compose "$@"; }
 
 step "Stopping services (volumes preserved)"
-if ! compose stop; then
+if ! compose --profile memory --profile tools stop; then
   err "docker compose stop failed."
   exit 1
 fi
