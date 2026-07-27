@@ -88,10 +88,10 @@ for service in postgres aeon aeon-worker nexus-agentd nexus-mcp; do
   fi
 done
 
-if compose exec -T nexus-agentd \
+if MSYS2_ARG_CONV_EXCL='/run/nexus' compose exec -T nexus-agentd \
   nexus daemon ping --socket /run/nexus/nexus-agentd.sock >/dev/null 2>&1; then
   pass "nexus-agentd live (daemon ping)"
-elif compose exec -T nexus-agentd \
+elif MSYS2_ARG_CONV_EXCL='/run/nexus' compose exec -T nexus-agentd \
   test -S /run/nexus/nexus-agentd.sock >/dev/null 2>&1; then
   pass "nexus-agentd live (socket present)"
 else

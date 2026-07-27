@@ -48,8 +48,9 @@ if [[ -z "$agentd_id" ]] ||
   log "FATAL: nexus-agentd is not running. Run ./start.sh first."
   exit 1
 fi
-if ! "${compose[@]}" exec -T nexus-agentd \
-  nexus daemon ping --socket /run/nexus/nexus-agentd.sock >/dev/null 2>&1; then
+if ! MSYS2_ARG_CONV_EXCL='/run/nexus' "${compose[@]}" exec -T nexus-agentd \
+  nexus daemon ping --socket /run/nexus/nexus-agentd.sock \
+    </dev/null >/dev/null 2>&1; then
   log "FATAL: nexus-agentd is running but not ready. Check ./logs.sh nexus-agentd."
   exit 1
 fi
