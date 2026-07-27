@@ -35,7 +35,7 @@ if [[ "$confirm" != "reset" ]]; then
 fi
 
 printf '\n%s▸ Tearing down stack and removing volumes%s\n' "$C_BOLD" "$C_RESET"
-if ! compose down -v; then
+if ! compose --profile memory --profile tools down -v; then
   err "docker compose down -v failed."
   exit 1
 fi

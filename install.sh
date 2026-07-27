@@ -132,6 +132,28 @@ set_env_value NEXUSIQ_UID "$(id -u)"
 set_env_value NEXUSIQ_GID "$(id -g)"
 ok "recorded host identity in .env (NEXUSIQ_UID/NEXUSIQ_GID)"
 
+# shellcheck source=scripts/runtime-mode.sh
+source "${ROOT_DIR}/scripts/runtime-mode.sh"
+nexusiq_resolve_runtime_mode "${ROOT_DIR}/.env"
+export NEXUS_AEON_ENABLED="$NEXUSIQ_AEON_ENABLED_NORMALIZED"
+ok "selected runtime mode: memory ${NEXUSIQ_MEMORY_MODE}"
+
+finish_install() {
+  printf '\n%s%s✓ NexusIQ install complete.%s\n' "$C_BOLD" "$C_GREEN" "$C_RESET"
+  printf 'Memory: %s\n' "$NEXUSIQ_MEMORY_MODE"
+  if [[ "$NEXUSIQ_MEMORY_MODE" == "disabled" ]]; then
+    printf 'Available now: Nexus execution and Proof Capsules\n'
+    printf 'To enable memory: configure a provider, set NEXUS_AEON_ENABLED=true, re-run ./install.sh, then ./start.sh\n'
+  else
+    printf 'Available after start: Nexus execution, Proof Capsules, PostgreSQL, and AEON memory\n'
+  fi
+  if [[ "$DO_START" -eq 1 ]]; then
+    run_step "Starting selected services (--start)"
+    CURRENT_STEP="start.sh"
+    exec bash "${ROOT_DIR}/start.sh"
+  fi
+  printf '\nNext step: ./start.sh\n\n'
+}
 # ============================================================================
 run_step "Generating secrets"
 # ============================================================================
@@ -162,18 +184,23 @@ if [[ "${NEXUSIQ_USE_PREBUILT:-false}" == "true" ]]; then
     # tag (see VERSION_MATRIX.md) for a reproducible pull.
     warn "NEXUSIQ_IMAGE_TAG not set — pulling the floating ':latest' tag, which is NOT pinned to this kit's VERSION_MATRIX row and is not reproducible across installs. Set NEXUSIQ_IMAGE_TAG=<release tag> once one exists."
   fi
-  # Only set the image refs if the operator hasn't overridden them.
-  grep -q '^NEXUS_IMAGE=' "${ROOT_DIR}/.env" 2>/dev/null     || echo "NEXUS_IMAGE=ghcr.io/adaptiveliquidity/nexusiq-nexus:${PREBUILT_TAG}" >> "${ROOT_DIR}/.env"
-  grep -q '^AEON_IQ_IMAGE=' "${ROOT_DIR}/.env" 2>/dev/null     || echo "AEON_IQ_IMAGE=ghcr.io/adaptiveliquidity/aeon-iq:${PREBUILT_TAG}" >> "${ROOT_DIR}/.env"
-  ok "image refs set in .env (tag: ${PREBUILT_TAG})"
-  if compose pull aeon aeon-worker nexus-agentd; then
-    ok "prebuilt images pulled"
+  set_env_value NEXUS_IMAGE "${NEXUS_IMAGE:-ghcr.io/adaptiveliquidity/nexusiq-nexus:${PREBUILT_TAG}}"
+  if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
+    set_env_value AEON_IQ_IMAGE "${AEON_IQ_IMAGE:-ghcr.io/adaptiveliquidity/aeon-iq:${PREBUILT_TAG}}"
+    PREBUILT_SERVICES=(postgres aeon aeon-worker nexus-agentd)
+    PREBUILT_PROFILE=(--profile memory)
   else
-    err "could not pull prebuilt images from ghcr (no release published yet, or no network)."
+    PREBUILT_SERVICES=(nexus-agentd)
+    PREBUILT_PROFILE=()
+  fi
+  ok "selected prebuilt images for memory ${NEXUSIQ_MEMORY_MODE} (tag: ${PREBUILT_TAG})"
+  if compose "${PREBUILT_PROFILE[@]}" pull "${PREBUILT_SERVICES[@]}"; then
+    ok "prebuilt images pulled for: ${PREBUILT_SERVICES[*]}"
+  else
+    err "could not pull the selected prebuilt images from ghcr."
     err "Re-run without NEXUSIQ_USE_PREBUILT to build from source instead."
     exit 1
-  fi
-  # Data directories + the sample module are still needed in prebuilt mode.
+  fi  # Data directories + the sample module are still needed in prebuilt mode.
   for d in proofs timeline modules logs run; do
     mkdir -p "${ROOT_DIR}/data/${d}"
   done
@@ -186,7 +213,7 @@ if [[ "${NEXUSIQ_USE_PREBUILT:-false}" == "true" ]]; then
     printf '%s' "$WASM_B64" | base64 -d > "$SAMPLE_WASM"
     ok "baked data/modules/sample_tool.wasm"
   fi
-  ok "prebuilt-image install complete — run ./start.sh next"
+  finish_install
   exit 0
 fi
 
@@ -235,6 +262,7 @@ else
   fi
 fi
 
+if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
 # ---- AEON-IQ ----
 if [[ -n "${NEXUSIQ_VENDOR_AEON:-}" && -d "${NEXUSIQ_VENDOR_AEON}" ]]; then
   link_checkout "$(readlink -f "${NEXUSIQ_VENDOR_AEON}")" "aeon-iq"
@@ -255,6 +283,10 @@ else
     err "    NEXUSIQ_VENDOR_AEON=/home/ahpsi/AEON-IQ ./install.sh"
     exit 1
   fi
+fi
+
+else
+  ok "memory disabled — AEON-IQ source was not cloned or vendored"
 fi
 
 # ============================================================================
@@ -302,46 +334,37 @@ else
 fi
 
 # ============================================================================
-run_step "Building images"
+run_step "Building selected images"
 # ============================================================================
-# Default policy: build locally. --build-local makes it explicit but local
-# build is also the fallback whenever the images aren't pullable.
 if [[ "$FORCE_LOCAL" -eq 1 ]]; then
   ok "local build forced (--build-local)"
 fi
-if compose build; then
-  ok "docker compose build complete"
+if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
+  BUILD_PROFILE=(--profile memory)
+  BUILD_SERVICES=(nexus-agentd aeon aeon-worker)
 else
-  err "docker compose build failed."
+  BUILD_PROFILE=()
+  BUILD_SERVICES=(nexus-agentd)
+fi
+if compose "${BUILD_PROFILE[@]}" build "${BUILD_SERVICES[@]}"; then
+  ok "built services: ${BUILD_SERVICES[*]}"
+else
+  err "docker compose build failed for: ${BUILD_SERVICES[*]}"
   exit 1
 fi
-
 # ============================================================================
-run_step "Pulling base images"
+run_step "Pulling selected base images"
 # ============================================================================
-# Pull any images referenced via `image:` (e.g. postgres). Build-only services
-# are ignored; failure here is non-fatal because the local build already
-# produced the app images.
-if compose pull --ignore-buildable 2>/dev/null || compose pull 2>/dev/null; then
-  ok "base images pulled"
+if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
+  if compose --profile memory pull --ignore-buildable postgres aeon aeon-worker nexus-agentd 2>/dev/null; then
+    ok "memory-mode base images pulled"
+  else
+    warn "could not pull some base images (will rely on locally built / cached images)"
+  fi
 else
-  warn "could not pull some base images (will rely on locally built / cached images)"
+  ok "memory disabled — no AEON or PostgreSQL image pull requested"
 fi
-
 # ============================================================================
-# Done — next steps
+# Done
 # ============================================================================
-printf '\n%s%s✓ NexusIQ install complete.%s\n' "$C_BOLD" "$C_GREEN" "$C_RESET"
-
-if [[ "$DO_START" -eq 1 ]]; then
-  run_step "Starting stack (--start)"
-  CURRENT_STEP="start.sh"
-  exec bash "${ROOT_DIR}/start.sh"
-fi
-
-printf '\n%sNext steps:%s\n' "$C_BOLD" "$C_RESET"
-printf '  %s./start.sh%s                 start the stack (postgres, aeon, nexus-agentd)\n' "$C_DIM" "$C_RESET"
-printf '  %s./logs.sh%s                  follow logs\n' "$C_DIM" "$C_RESET"
-printf '  %s./generate-mcp-config.sh%s   emit MCP client config for nexus-mcp\n' "$C_DIM" "$C_RESET"
-printf '  %s./stop.sh%s                  stop the stack (volumes preserved)\n' "$C_DIM" "$C_RESET"
-echo
+finish_install

@@ -1,39 +1,50 @@
 # NexusIQ Self-Host Kit
 
-Run a local WASM sandbox runtime with a persistent memory plane and cryptographic Proof Capsules — one-command Docker setup, no Rust toolchain required.
-
----
+Run Nexus WASM workloads and produce cryptographic Proof Capsules with a
+provider-keyless default install. The PostgreSQL + AEON memory plane is an
+explicit opt-in.
 
 ## Quickstart
 
 ```bash
-cp .env.example .env
-# Set OPENAI_API_KEY=<your key> inside .env
-./install.sh
-./start.sh
+git clone https://github.com/Adaptive-Liquidity/Nexus-IQ-temp.git
+cd Nexus-IQ-temp
+./install.sh --start
 ./doctor.sh
-./generate-mcp-config.sh
-# Paste the generated config into your MCP client
-./run-live-example.sh
 ```
 
-That is the complete setup sequence. Everything below explains what each step does and how to tailor the stack for your environment.
+No model-provider credential is needed. `install.sh` creates `.env` with
+`NEXUS_AEON_ENABLED=false`, generates the internal agentd authentication
+token, vendors/builds Nexus only, and bakes the sample WASM module.
 
----
+Generate MCP client configuration when ready:
 
-## What you get
+```bash
+./generate-mcp-config.sh
+```
 
-- **Nexus** — a WASM sandbox hypervisor with the `aeon-memory` feature. Executes WASM modules in isolated, capability-gated WASI environments, produces cryptographically-bound Proof Capsules, and supports snapshot/rollback.
-- **AEON-IQ** — a persistent memory plane (`memoryos` Rust/Axum service), split into a request-serving proxy and a dedicated background worker (see [Architecture](#architecture)). Stores episodic memories as vector embeddings (via pgvector), runs semantic recall, records MemoryEvidence tied to proofs, and maintains an agent timeline.
-- **Together**: WASM execution with a memory plane. Every execution produces a Proof Capsule; timeline events are written to AEON and queryable via its REST API.
-- **Ed25519 evidence attestation**: AEON-IQ counter-signs every search response; Nexus verifies the signature before a proof capsule can claim `Attested`/`AttestedWithRecall` (vs. the unverified `Advisory` fallback). See [Evidence attestation](#evidence-attestation).
-- **One-command setup**: `./install.sh` clones source, generates secrets, and builds everything in Docker (or pulls prebuilt images — see [Prebuilt images](#prebuilt-images)). No Rust toolchain needed on your machine.
+## Operating modes
 
----
+Core mode (default):
+
+- Nexus execution and sandboxing;
+- Proof Capsule generation;
+- on-demand MCP through the running authenticated `nexus-agentd`;
+- no PostgreSQL, AEON proxy, AEON worker, memory write, or memory recall.
+
+Memory mode (explicit opt-in):
+
+- set `NEXUS_AEON_ENABLED=true`;
+- configure a supported provider;
+- re-run `./install.sh`, then `./start.sh`;
+- adds PostgreSQL, AEON memory write/recall, the AEON worker, and related
+  evidence checks.
+
+Provider configuration never auto-enables memory.
 
 ## Architecture
 
-Five Docker services, all on an isolated internal network:
+Compose defines five services on an isolated network. Core mode starts only `nexus-agentd`; `nexus-mcp` runs on demand. The three memory-profile services below start only when memory is explicitly enabled:
 
 ```
  ┌───────────────────────────────────────────────────────────────┐
@@ -79,7 +90,7 @@ Five Docker services, all on an isolated internal network:
 | `nexus-agentd` | Nexus execution daemon | Unix socket (shared volume) |
 | `nexus-mcp` | STDIO MCP server | None — launched on demand |
 
-`nexus-mcp` is **not** a long-running port. MCP clients launch it via `connect-mcp.sh`, which runs `docker compose run --rm -T nexus-mcp` and speaks JSON-RPC 2.0 over stdin/stdout. There is no HTTP MCP endpoint.
+`nexus-mcp` is **not** a long-running port. MCP clients launch it via `connect-mcp.sh`, which runs `docker compose --profile tools run --rm --no-deps -T nexus-mcp` and speaks JSON-RPC 2.0 over stdin/stdout. There is no HTTP MCP endpoint.
 
 `aeon-worker` matters even though it serves no client traffic directly: extraction jobs are enqueued by `aeon` and only drained by `aeon-worker` (`EXTRACTION_OUTBOX_ENABLED` defaults to `true`), so a dead worker means memory writes silently stop while chat completions keep succeeding. `./doctor.sh` and `./start.sh`'s health wait both check `aeon-worker`'s `/health` explicitly for this reason.
 
@@ -87,96 +98,41 @@ Five Docker services, all on an isolated internal network:
 
 ## System requirements
 
-- **Docker Engine** 24+ with the **Compose v2 plugin** (`docker compose`)
-  - Docker Desktop (macOS/Windows) or Docker Engine on Linux both work
-  - [Install Docker](https://docs.docker.com/engine/install/)
-  - [Install Compose plugin](https://docs.docker.com/compose/install/)
-- **~4 GB RAM** available to Docker
-- **Disk**: ~3 GB for images; a few MB per proof/memory stored
-- **An LLM provider API key** (OpenAI by default; see [Configuring the LLM provider](#configuring-the-llm-provider))
-- `bash`, `curl`, `git` on the host (standard on macOS/Linux; WSL2 on Windows)
-- `jq` or `python3` for the live example script (either works)
+- Docker Engine 24+ with the Compose v2 plugin;
+- about 2 GB RAM for core mode (more for memory mode);
+- Bash 4.0 or newer, `curl`, and `git`;
+- `jq` or `python3` for smoke scripts.
 
----
+A provider credential is required only for explicitly enabled memory mode.
 
-## 5-minute quickstart
+## Installation behavior
 
-### 1. Copy the env file and set your API key
+In core mode, `./install.sh`:
 
-```bash
-cp .env.example .env
-```
+- creates `.env` from `.env.example` when absent;
+- generates `NEXUS_AGENTD_AUTH_TOKEN`;
+- vendors only the pinned Nexus source;
+- builds or pulls only the Nexus image;
+- creates `data/{proofs,timeline,modules,logs,run}`;
+- bakes `data/modules/sample_tool.wasm`.
 
-Open `.env` and set:
+It does not clone/build/pull AEON-IQ and does not pull PostgreSQL.
 
-```
-OPENAI_API_KEY=sk-...
-```
-
-That is the only required edit for the default OpenAI provider.
-
-### 2. Run the installer
+To enable memory:
 
 ```bash
+# Configure a supported provider and set NEXUS_AEON_ENABLED=true in .env first.
 ./install.sh
-```
-
-The installer:
-- Checks for Docker and the Compose plugin
-- Generates secrets (Postgres password, management API key, legacy HMAC key, Ed25519 evidence-signing key, agentd auth token) and writes them into `.env`
-- Clones the Nexus and AEON-IQ source trees into `./vendor/` (or links your local checkouts if you set `NEXUSIQ_VENDOR_NEXUS` / `NEXUSIQ_VENDOR_AEON`), pinned to a tested revision (see [VERSION_MATRIX.md](VERSION_MATRIX.md))
-- Builds Docker images locally, or pulls prebuilt images if `NEXUSIQ_USE_PREBUILT=true` (see [Prebuilt images](#prebuilt-images))
-- Creates `./data/{proofs,timeline,modules,logs}`
-- Bakes a sample WASM module into `./data/modules/sample_tool.wasm`
-
-The first source build can take 5–15 minutes depending on machine speed (Rust compilation); subsequent runs use the Docker layer cache, and the prebuilt-image path skips compilation entirely.
-
-### 3. Start the stack
-
-```bash
 ./start.sh
-```
-
-Starts `postgres`, `aeon`, `aeon-worker`, and `nexus-agentd` in the background and waits for all four to report healthy. `nexus-mcp` is not started here — it runs on demand.
-
-### 4. Verify everything is up
-
-```bash
 ./doctor.sh
 ```
 
-Runs a suite of live checks (Docker daemon, service health, AEON API auth, agentd socket, MCP handshake, data directory writability, provider key presence). Every check prints `PASS` or `FAIL`. Fix any `FAIL` lines before proceeding; see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-
-### 5. Connect your MCP client
-
-```bash
-./generate-mcp-config.sh
-```
-
-Writes ready-to-paste JSON configs with absolute paths baked in to `./mcp/`:
-
-```
-mcp/claude-desktop.json
-mcp/cursor.json
-mcp/openhands.json
-mcp/generic-mcp.json
-```
-
-Paste the contents of the appropriate file into your MCP client config (see [Connecting MCP clients](#connecting-mcp-clients) below).
-
-### 6. Run the live example
-
-```bash
-./run-live-example.sh
-```
-
-Exercises the full end-to-end flow against the running stack. See [Running the live example](#running-the-live-example).
-
----
+An explicit memory request fails validation before vendoring, building,
+pulling, or starting if its provider or required secrets are unavailable.
 
 ## Configuring the LLM provider
 
-AEON-IQ uses an LLM for two tasks: **embedding** memories (semantic storage) and **extracting** structured data from them. The default provider is OpenAI.
+This section applies only when `NEXUS_AEON_ENABLED=true`. AEON-IQ uses a provider to embed memories and extract structured data. The default memory-mode provider is OpenAI.
 
 > **SSRF egress guard:** AEON-IQ validates provider base URLs at startup. By default it requires `https` and blocks loopback, private, and link-local addresses. For the default cloud providers (OpenAI, Anthropic, Gemini — all `https`) this is completely transparent; no action needed. If you point AEON at a **local or self-hosted LLM** (Ollama on `localhost`, an `http://` proxy, a provider on a private IP), the `aeon` container will refuse to start unless you add `AEON_ALLOW_INSECURE_PROVIDER_URLS=true` to your `.env`. Note: even with this flag set, the cloud-metadata endpoint remains blocked.
 
@@ -186,8 +142,10 @@ Use `.env.example` or `.env.openai.example`. Set:
 
 ```
 UPSTREAM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
 ```
+
+Set `OPENAI_API_KEY` to a real OpenAI credential through your normal secret
+management process before enabling memory.
 
 Default models: `text-embedding-3-small` (1536 dimensions), `gpt-4o-mini` extractor. These are configured in `.env.openai.example`.
 
@@ -199,7 +157,7 @@ cp .env.anthropic.example .env
 
 Then set `OPENAI_API_KEY` to your **Anthropic** API key. (AEON-IQ uses a single upstream-key variable regardless of provider.)
 
-Note: Anthropic does not serve embeddings. The Anthropic preset points the embedding lane at OpenAI — you will need an OpenAI key for embeddings and an Anthropic key for chat/extraction. See `.env.anthropic.example` for details.
+Note: Anthropic does not serve embeddings, while this kit exposes one upstream-key slot. A split-key Anthropic + OpenAI deployment therefore requires an operator-managed compatible proxy; the preset alone cannot carry two independent credentials.
 
 ### Gemini
 
@@ -246,65 +204,51 @@ Copy the returned `key_id` into `.env` as `NEXUS_AEON_VERIFYING_KEY`, then `./st
 
 ## Prebuilt images
 
-By default `./install.sh` builds Nexus and AEON-IQ from source (first build: 5–15 min; cached thereafter). To skip compilation entirely and pull published, cosign-signed images instead:
-
 ```bash
-NEXUSIQ_USE_PREBUILT=true NEXUSIQ_IMAGE_TAG=<release tag> ./install.sh
+NEXUSIQ_USE_PREBUILT=true NEXUSIQ_IMAGE_TAG=<release-tag> ./install.sh
 ```
 
-`NEXUSIQ_IMAGE_TAG` should match a row in [VERSION_MATRIX.md](VERSION_MATRIX.md) for a reproducible pull. **No kit release has been tagged yet** — omitting `NEXUSIQ_IMAGE_TAG` pulls the floating `:latest` tag, which `install.sh` will warn about since it is not pinned to any tested compatibility contract. Prefer source builds (the default) until a real release tag exists.
-
----
+Core mode pulls only the Nexus image. Memory mode pulls the Nexus, AEON, and
+PostgreSQL images. No release image is claimed available by this repository;
+use the source-build default until a matching release exists.
 
 ## Starting and stopping the stack
 
 ```bash
-./start.sh         # start postgres, aeon, aeon-worker, nexus-agentd (detached)
-./stop.sh          # stop the stack (data volumes preserved)
-./logs.sh aeon     # follow logs for a specific service
-./logs.sh          # follow all service logs
-```
-
-To restart after a config change:
-
-```bash
-./stop.sh && ./start.sh
-```
-
-To update (after pulling new kit files):
-
-```bash
-./stop.sh
-./install.sh       # rebuilds images with any source changes
 ./start.sh
+./logs.sh
+./stop.sh
 ```
 
----
+With memory disabled, `start.sh` stops any previously running `aeon`,
+`aeon-worker`, and `postgres` containers without deleting volumes, then starts
+and waits for `nexus-agentd`. With memory enabled, it starts and health-checks
+the three memory services before starting agentd.
+
+`connect-mcp.sh` never starts dependencies. It fails clearly unless the
+already-running agentd is healthy.
 
 ## Verifying with doctor
 
+`./doctor.sh` is mode-aware.
+
+Core mode requires Docker/Compose, valid agentd authentication, a healthy
+agentd, MCP initialize/tool listing, writable data directories, and all memory
+containers stopped. It prints `memory plane disabled by configuration` and
+does not label memory functionality as passed.
+
+Memory mode additionally requires healthy PostgreSQL, AEON proxy and worker,
+management authentication, provider configuration, and the existing evidence
+key checks.
+
+For a complete proof of the selected service set:
+
 ```bash
-./doctor.sh
+./verify-live-stack.sh
 ```
 
-Each line is `PASS <check>` or `FAIL <check>`. Warnings (`WARN`) are advisory and do not cause a non-zero exit. The script exits non-zero if any check fails.
-
-Checks run:
-- `.env` present and readable
-- Docker daemon running, Compose plugin available
-- All five Compose services defined
-- Postgres healthy (`pg_isready`)
-- AEON `/health` returns 200
-- **AEON worker `/health` returns 200** — catches a dead `aeon-worker` before it silently stops memory writes (see [Architecture](#architecture))
-- AEON management API authenticated (key required, 401/403 without)
-- `nexus-agentd` live (`nexus daemon ping`)
-- `nexus-mcp` handshake (initialize + tools/list)
-- `data/proofs` and `data/timeline` writable
-- No mock/synthetic flags active
-- Provider key present (warning only if missing)
-- Evidence counter-signature verification configured (warning only if `NEXUS_AEON_VERIFYING_KEY` is unset — see [Evidence attestation](#evidence-attestation))
-
----
+Core verification runs the Nexus execution and Proof Capsule smokes only.
+Memory verification preserves the full live example.
 
 ## Connecting MCP clients
 
@@ -353,21 +297,18 @@ If your client cannot find `connect-mcp.sh`, use its absolute path.
 
 ## Running the live example
 
+`./run-live-example.sh` is the memory-enabled write/recall/timeline flow. Run
+it only after setting `NEXUS_AEON_ENABLED=true`, configuring a real provider,
+and passing `./doctor.sh`.
+
+For core mode, use:
+
 ```bash
-./run-live-example.sh
+./verify-live-stack.sh
 ```
 
-Runs five steps live against the running stack:
-
-1. **(a) Write a memory** — POSTs an episodic memory to AEON-IQ via the management API. Requires a provider key for embedding.
-2. **(b) Recall** — semantic search over stored memories. Requires a provider key for embedding.
-3. **(c) Execute + proof** — calls `nexus_execute_proof` via `connect-mcp.sh` on `sample_tool.wasm`. Does **not** require a provider key.
-4. **(d) Extract proof capsule** — writes the returned Proof Capsule to `data/proofs/<capsule_id>.json`.
-5. **(e) Timeline** — POSTs the execution event to AEON-IQ's timeline.
-
-Steps (a), (b), and (e) fail cleanly if no provider key is set. Step (c) runs regardless. See [ARCHITECTURE.md](ARCHITECTURE.md) and [examples/expected_user_flow.md](examples/expected_user_flow.md) for a narrated walk-through.
-
----
+That verifies real WASM execution and writes a real Proof Capsule without
+claiming memory recall.
 
 ## Viewing proof capsules
 
@@ -384,7 +325,7 @@ Each capsule contains the module path, execution result, a capability grant reco
 
 ## Viewing timeline events
 
-Timeline events are stored in AEON-IQ's Postgres and queryable via the management API. The `MANAGEMENT_API_KEY` from `.env` is required.
+This section applies only to memory mode. Timeline events are stored in AEON-IQ's PostgreSQL database and queryable with `MANAGEMENT_API_KEY`.
 
 ```bash
 # Query timeline at or before a given time
@@ -429,7 +370,7 @@ curl -fsS -X POST http://127.0.0.1:8080/api/v1/memories/search \
 - No versioned kit release has been tagged yet, so `NEXUSIQ_USE_PREBUILT=true` can only pull the unpinned `:latest` tag (see [Prebuilt images](#prebuilt-images)) — source build remains the default and reproducible path.
 - Ollama support requires a manual schema change and is experimental.
 - The AEON pgvector column is fixed at `vector(1536)`. Non-1536-dim embedding models require a schema migration.
-- Anthropic does not provide an embeddings API; a separate embeddings provider is required when using the Anthropic preset.
+- Anthropic does not provide embeddings, and the kit has one upstream-key slot; split-key deployments require an operator-managed compatible proxy.
 - `nexus-mcp` is single-session per container invocation — each MCP client session launches a fresh container.
 
 ---
@@ -441,7 +382,7 @@ See [SECURITY.md](SECURITY.md) for the full security reference.
 Short version:
 - All host ports are bound to `127.0.0.1` only.
 - Postgres is not published to the host at all.
-- Secrets are auto-generated by `install.sh` and stored only in `.env`.
+- Internal secrets required by the selected mode are generated by `install.sh` and stored only in `.env`.
 - Do not commit `.env`.
 - Do not expose the AEON API (`127.0.0.1:8080`) or Postgres to the network without a reverse proxy and TLS.
 - Proof Capsules and timeline events contain execution metadata — treat them as sensitive.

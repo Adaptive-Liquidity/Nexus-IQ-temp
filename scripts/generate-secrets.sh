@@ -1,37 +1,35 @@
 #!/usr/bin/env bash
 #
-# generate-secrets.sh — fill blank secrets in .env, in place.
+# generate-secrets.sh — fill blank secrets required by the selected mode.
 #
-# For each managed secret that is blank in .env, generate a strong random
-# value and rewrite the line. Cross-wire NEXUS_AEON_MANAGEMENT_KEY to the
-# generated MANAGEMENT_API_KEY. NEXUS_AEON_HMAC_KEY is forced to 64 hex chars
-# (32 bytes). Secret VALUES are never printed — only the names of generated
-# secrets are reported.
+# NEXUS_AGENTD_AUTH_TOKEN is always generated. AEON/PostgreSQL management,
+# signing, and storage secrets are generated only when memory is enabled.
+# Secret values are never printed.
 #
 set -euo pipefail
 
-# ---- colored helpers --------------------------------------------------------
 if [[ -t 1 ]]; then
   C_GREEN=$'\033[32m'; C_RED=$'\033[31m'; C_YELLOW=$'\033[33m'; C_RESET=$'\033[0m'
 else
   C_GREEN=''; C_RED=''; C_YELLOW=''; C_RESET=''
 fi
-ok()   { printf '%s✓%s %s\n'  "$C_GREEN"  "$C_RESET" "$*"; }
-err()  { printf '%s✗%s %s\n'  "$C_RED"    "$C_RESET" "$*" >&2; }
-warn() { printf '%s⚠%s %s\n'  "$C_YELLOW" "$C_RESET" "$*"; }
+ok()   { printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+err()  { printf '%s✗%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+warn() { printf '%s⚠%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
 
-# ---- locate .env ------------------------------------------------------------
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  err "No .env at ${ENV_FILE} — run install.sh first (it creates .env from .env.example)."
+  err "No .env at ${ENV_FILE} — run install.sh first."
   exit 1
 fi
 
-# ---- random hex generator (openssl preferred, /dev/urandom fallback) --------
-# Args: $1 = number of bytes. Emits 2*N lowercase hex chars, no newline issues.
+# shellcheck source=scripts/runtime-mode.sh
+source "${SCRIPT_DIR}/runtime-mode.sh"
+nexusiq_resolve_runtime_mode "$ENV_FILE"
+
 rand_hex() {
   local bytes="$1"
   if command -v openssl >/dev/null 2>&1; then
@@ -46,27 +44,15 @@ rand_hex() {
   fi
 }
 
-# ---- read current value of a key from .env (raw, may be empty) --------------
-# Matches: KEY=value  (ignores surrounding quotes for emptiness test).
 get_val() {
-  local key="$1" line val
-  line="$(grep -E "^${key}=" "$ENV_FILE" | head -n1 || true)"
-  val="${line#*=}"
-  # strip surrounding single/double quotes for the emptiness check
-  val="${val%\"}"; val="${val#\"}"
-  val="${val%\'}"; val="${val#\'}"
-  printf '%s' "$val"
+  nexusiq_load_env "$ENV_FILE"
+  nexusiq_env_get "$1"
 }
 
-# ---- check whether key exists at all ----------------------------------------
 has_key() {
   grep -qE "^$1=" "$ENV_FILE"
 }
 
-# ---- set KEY=value in .env, in place (create if missing) --------------------
-# Uses a temp file + awk so the value is never exposed on a command line and
-# special characters in the value are written literally (no shell/sed escaping
-# pitfalls). The value is passed via environment, not argv.
 set_val() {
   local key="$1" value="$2" tmp
   tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
@@ -78,18 +64,19 @@ set_val() {
         else { print }
       }
       END { if (!done) print k "=" v }
-    ' "$ENV_FILE" > "$tmp"
+    ' "$ENV_FILE" >"$tmp"
   else
-    cat "$ENV_FILE" > "$tmp"
-    KEY="$key" VALUE="$value" awk 'BEGIN { print ENVIRON["KEY"] "=" ENVIRON["VALUE"] }' >> "$tmp"
+    cp "$ENV_FILE" "$tmp"
+    if [[ -s "$tmp" && -n "$(tail -c 1 "$tmp")" ]]; then
+      printf '\n' >>"$tmp"
+    fi
+    KEY="$key" VALUE="$value" awk \
+      'BEGIN { print ENVIRON["KEY"] "=" ENVIRON["VALUE"] }' >>"$tmp"
   fi
-  # Preserve restrictive perms across the swap.
   chmod 600 "$tmp" 2>/dev/null || true
   mv "$tmp" "$ENV_FILE"
 }
 
-# ---- generate one secret if blank -------------------------------------------
-# Args: $1 = key, $2 = byte length (default 32).
 ensure_secret() {
   local key="$1" bytes="${2:-32}" cur
   cur="$(get_val "$key")"
@@ -101,64 +88,49 @@ ensure_secret() {
   fi
 }
 
-echo "Generating missing secrets in .env (values are never printed)…"
+echo "Generating secrets required for memory ${NEXUSIQ_MEMORY_MODE} (values are never printed)..."
 
-# POSTGRES_PASSWORD: 32 random bytes -> 64 hex chars (URL-safe, no specials).
-ensure_secret POSTGRES_PASSWORD 32
-
-# MANAGEMENT_API_KEY: 32 random bytes -> 64 hex chars.
-ensure_secret MANAGEMENT_API_KEY 32
-
-# NEXUS_AGENTD_AUTH_TOKEN: 32 random bytes -> 64 hex chars.
+# Required in both core and memory modes.
 ensure_secret NEXUS_AGENTD_AUTH_TOKEN 32
 
-# NEXUS_AEON_HMAC_KEY: MUST be >=32 bytes / >=64 hex chars. Force exactly 64
-# hex chars whenever blank OR too short.
-hmac_cur="$(get_val NEXUS_AEON_HMAC_KEY)"
-if [[ -z "$hmac_cur" ]]; then
-  set_val NEXUS_AEON_HMAC_KEY "$(rand_hex 32)"
-  ok "generated NEXUS_AEON_HMAC_KEY"
-elif [[ ${#hmac_cur} -lt 64 ]]; then
-  set_val NEXUS_AEON_HMAC_KEY "$(rand_hex 32)"
-  warn "NEXUS_AEON_HMAC_KEY was shorter than 64 hex chars — regenerated"
+if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
+  ensure_secret POSTGRES_PASSWORD 32
+  ensure_secret MANAGEMENT_API_KEY 32
+
+  hmac_cur="$(get_val NEXUS_AEON_HMAC_KEY)"
+  if [[ -z "$hmac_cur" ]]; then
+    set_val NEXUS_AEON_HMAC_KEY "$(rand_hex 32)"
+    ok "generated NEXUS_AEON_HMAC_KEY"
+  elif [[ ${#hmac_cur} -lt 64 || ! "$hmac_cur" =~ ^[0-9a-fA-F]+$ ]]; then
+    set_val NEXUS_AEON_HMAC_KEY "$(rand_hex 32)"
+    warn "NEXUS_AEON_HMAC_KEY was invalid — regenerated"
+  else
+    warn "NEXUS_AEON_HMAC_KEY already set — left unchanged"
+  fi
+
+  ensure_secret AEON_EVIDENCE_SIGNING_KEY 32
+
+  mgmt_val="$(get_val MANAGEMENT_API_KEY)"
+  if [[ -z "$mgmt_val" ]]; then
+    err "MANAGEMENT_API_KEY is empty after generation — cannot cross-wire Nexus."
+    exit 1
+  fi
+  aeon_mgmt_cur="$(get_val NEXUS_AEON_MANAGEMENT_KEY)"
+  if [[ "$aeon_mgmt_cur" != "$mgmt_val" ]]; then
+    set_val NEXUS_AEON_MANAGEMENT_KEY "$mgmt_val"
+    ok "cross-wired NEXUS_AEON_MANAGEMENT_KEY = MANAGEMENT_API_KEY"
+  else
+    ok "NEXUS_AEON_MANAGEMENT_KEY already matches MANAGEMENT_API_KEY"
+  fi
+
+  db_url="$(get_val DATABASE_URL)"
+  if [[ -n "$db_url" && "$db_url" != *'${POSTGRES_PASSWORD}'* && "$db_url" == *':'*'@'* ]]; then
+    warn "DATABASE_URL appears to embed a literal password — prefer compose interpolation."
+  fi
 else
-  warn "NEXUS_AEON_HMAC_KEY already set — left unchanged"
+  ok "memory disabled — AEON/PostgreSQL secrets were not generated"
 fi
 
-# AEON_EVIDENCE_SIGNING_KEY: Ed25519 seed (32 bytes / 64 hex chars) AEON-IQ
-# uses to counter-sign memory-search evidence. The matching PUBLIC verifying
-# key is read after the stack is up:
-#   curl -s -H "X-Management-Key: $MANAGEMENT_API_KEY" \
-#     http://127.0.0.1:8080/api/v1/evidence/verifying-key
-# and pinned as NEXUS_AEON_VERIFYING_KEY (then restart the nexus services).
-# Verification is off until the verifying key is pinned.
-ensure_secret AEON_EVIDENCE_SIGNING_KEY 32
-
-# Cross-wire: NEXUS_AEON_MANAGEMENT_KEY MUST equal MANAGEMENT_API_KEY.
-mgmt_val="$(get_val MANAGEMENT_API_KEY)"
-if [[ -z "$mgmt_val" ]]; then
-  err "MANAGEMENT_API_KEY is empty after generation — cannot cross-wire NEXUS_AEON_MANAGEMENT_KEY."
-  exit 1
-fi
-aeon_mgmt_cur="$(get_val NEXUS_AEON_MANAGEMENT_KEY)"
-if [[ "$aeon_mgmt_cur" != "$mgmt_val" ]]; then
-  set_val NEXUS_AEON_MANAGEMENT_KEY "$mgmt_val"
-  ok "cross-wired NEXUS_AEON_MANAGEMENT_KEY = MANAGEMENT_API_KEY"
-else
-  ok "NEXUS_AEON_MANAGEMENT_KEY already matches MANAGEMENT_API_KEY"
-fi
-
-# DATABASE_URL: prefer compose interpolation. Do NOT embed the password here.
-# If a stale DATABASE_URL exists with an inline password, warn (we intentionally
-# leave compose to interpolate ${POSTGRES_PASSWORD}). We do not write the
-# password into DATABASE_URL.
-db_url="$(get_val DATABASE_URL)"
-if [[ -n "$db_url" && "$db_url" != *'${POSTGRES_PASSWORD}'* && "$db_url" == *':'*'@'* ]]; then
-  warn "DATABASE_URL appears to embed a literal password — prefer \${POSTGRES_PASSWORD} interpolation in compose."
-fi
-
-# Lock down the file: secrets at rest must be 0600.
 chmod 600 "$ENV_FILE"
 ok "secured ${ENV_FILE} (chmod 600)"
-
 echo "Secret generation complete."

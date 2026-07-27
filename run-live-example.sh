@@ -43,26 +43,15 @@ HOST_MODULE="${ROOT_DIR}/data/modules/$(basename "$MODULE_PATH")"
 mkdir -p "$PROOF_DIR"
 
 # ---- safe .env loader -------------------------------------------------------
-declare -A ENVV
-load_env() {
-  [[ -f "$ENV_FILE" ]] || { err "No .env at ${ENV_FILE} — run ./install.sh first."; exit 1; }
-  local raw line key val
-  while IFS= read -r raw || [[ -n "$raw" ]]; do
-    line="${raw#"${raw%%[![:space:]]*}"}"
-    [[ -z "$line" || "$line" == \#* ]] && continue
-    line="${line#export }"
-    [[ "$line" != *=* ]] && continue
-    key="${line%%=*}"; val="${line#*=}"
-    key="${key//[[:space:]]/}"
-    if   [[ "$val" == \"*\" ]]; then val="${val%\"}"; val="${val#\"}"
-    elif [[ "$val" == \'*\' ]]; then val="${val%\'}"; val="${val#\'}"; fi
-    [[ -z "$key" ]] && continue
-    ENVV["$key"]="$val"
-  done < "$ENV_FILE"
-}
-v() { printf '%s' "${ENVV[$1]:-}"; }
+[[ -f "$ENV_FILE" ]] || { err "No .env at ${ENV_FILE} — run ./install.sh first."; exit 1; }
+# shellcheck source=scripts/runtime-mode.sh
+source "${ROOT_DIR}/scripts/runtime-mode.sh"
+if ! nexusiq_resolve_runtime_mode "$ENV_FILE"; then
+  err "Invalid runtime-mode configuration in ${ENV_FILE}."
+  exit 1
+fi
+v() { nexusiq_env_get "$1"; }
 
-load_env
 AEON_PORT="$(v AEON_PORT)"; AEON_PORT="${AEON_PORT:-8080}"
 AEON_BASE="http://127.0.0.1:${AEON_PORT}"
 MGMT_KEY="$(v MANAGEMENT_API_KEY)"

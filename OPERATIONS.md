@@ -1,65 +1,62 @@
 # Operations
 
+## Runtime mode
+
+`scripts/runtime-mode.sh` is the authoritative, non-executing `.env` parser.
+Only case-insensitive `true` and `false` are accepted for
+`NEXUS_AEON_ENABLED`. A missing setting in a legacy/custom `.env` enables
+memory with a visible compatibility warning. Empty or malformed values fail.
+
 ## Stack lifecycle
 
-- `./install.sh`  
-  prepares `.env`, generates secrets, vendors sources, builds images, and creates data dirs.
-- `./start.sh`  
-  starts `postgres`, `aeon`, `nexus-agentd` and waits for health.
-- `./stop.sh`  
-  stops services (data retained).
-- `./restart.sh`  
-  stop then start.
-- `./logs.sh [service]`  
-  follow logs (all services or one).
-- `./doctor.sh`  
-  full health and auth verification.
-- `./reset.sh`  
-  stop and remove all volumes (data wipe; .env preserved).
-- `./uninstall.sh`  
-  remove stack + images + optional `.env` / `vendor` / `data`.
-- `./scripts/wait-for-health.sh`  
-  used by start path.
-- `./scripts/print-urls.sh`  
-  prints expected endpoints.
+- `./install.sh`: validates the selected mode, generates only its required
+  internal secrets, vendors/builds or pulls the selected services, and creates
+  data directories.
+- `./start.sh`: validates before changing containers. Core mode stops memory
+  containers while preserving volumes and starts agentd only. Memory mode
+  health-gates PostgreSQL, AEON, and the worker before agentd.
+- `./stop.sh`: stops default, tools, and memory-profile services; data remains.
+- `./restart.sh`: stop then mode-aware start.
+- `./logs.sh [service]`: follows logs across all profiles.
+- `./doctor.sh`: verifies exactly the configured service set.
+- `./reset.sh`: removes all named volumes after confirmation.
+- `./uninstall.sh`: removes the stack and optionally local files.
 
-`nexus-mcp` is not always-on. It is `--profile tools` and starts via MCP session.
+`nexus-mcp` remains in the `tools` profile and is launched per session.
+`connect-mcp.sh` uses `--no-deps` and requires a healthy running agentd.
 
 ## Verification flows
 
-Use scripts in this order for a clean live verification:
+Core mode:
 
 ```bash
 ./doctor.sh
 ./scripts/smoke-nexus-execute.sh
+./scripts/smoke-proof-capsule.sh
+./verify-live-stack.sh
+```
+
+Memory mode (`NEXUS_AEON_ENABLED=true` with a real provider):
+
+```bash
+./doctor.sh
 ./scripts/smoke-memory-recall.sh
+./scripts/smoke-nexus-execute.sh
 ./scripts/smoke-proof-capsule.sh
 ./scripts/smoke-timeline.sh
 ./run-live-example.sh
-./verify-live-stack.sh   # doctor + live example
+./verify-live-stack.sh
 ```
 
-Memory-based smoke checks require a valid provider key; MCP proof checks do not.
+Disabled memory checks are reported as disabled, never as successful recall.
 
-## Key provisioning and rotation
+## Secret rotation
 
-Core secrets used by runtime:
-
-- `MANAGEMENT_API_KEY`
-- `NEXUS_AEON_HMAC_KEY`
-- `NEXUS_AGENTD_AUTH_TOKEN`
-
-To rotate secrets:
-
-1. Clear these values in `.env` (leave provider keys if unchanged).
-2. Run `./scripts/generate-secrets.sh`.
-3. Restart with `./stop.sh && ./start.sh`.
-
-If the DB password rotates, use full stack recreation (`./reset.sh`) or a fresh `install.sh`.
-
-Validation:
-
-- `./scripts/validate-env.sh` validates required values and cross-wire constraints.
+`NEXUS_AGENTD_AUTH_TOKEN` is always required. PostgreSQL, AEON management,
+HMAC, and evidence-signing material is required/generated only in memory mode.
+To rotate active-mode secrets, clear them in `.env`, run
+`./scripts/generate-secrets.sh`, and restart. Rotating the PostgreSQL password
+requires coordinated database handling or a deliberate data reset.
 
 ## Postgres + pgvector backup/restore
 
@@ -68,13 +65,13 @@ Data is internal only and not exposed on host ports.
 Backup:
 
 ```bash
-docker compose exec -T postgres pg_dump -U nexusiq -d nexusiq > /tmp/nexusiq.sql
+docker compose --profile memory exec -T postgres pg_dump -U nexusiq -d nexusiq > /tmp/nexusiq.sql
 ```
 
 Restore (service down window recommended):
 
 ```bash
-cat /tmp/nexusiq.sql | docker compose exec -T postgres psql -U nexusiq -d nexusiq
+cat /tmp/nexusiq.sql | docker compose --profile memory exec -T postgres psql -U nexusiq -d nexusiq
 ```
 
 ## HNSW maintenance
@@ -88,7 +85,7 @@ There is no bundled pgvector maintenance CLI in the root kit scripts, but ANN in
 Example pattern:
 
 ```bash
-docker compose exec -T postgres psql -U nexusiq -d nexusiq -c "REINDEX INDEX CONCURRENTLY <hnsw_index_name>;"
+docker compose --profile memory exec -T postgres psql -U nexusiq -d nexusiq -c "REINDEX INDEX CONCURRENTLY <hnsw_index_name>;"
 ```
 
 If index maintenance collides with ongoing writes, choose conservative timings and monitor query impact.

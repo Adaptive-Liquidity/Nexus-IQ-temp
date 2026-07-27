@@ -35,7 +35,7 @@ if [[ "$confirm" != "uninstall" ]]; then
 fi
 
 printf '\n%s▸ Removing stack, volumes, and locally built images%s\n' "$C_BOLD" "$C_RESET"
-if ! compose down -v --rmi local; then
+if ! compose --profile memory --profile tools down -v --rmi local; then
   err "docker compose down -v --rmi local failed."
   exit 1
 fi
