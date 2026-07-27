@@ -18,9 +18,17 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 ENV_FILE="${ROOT_DIR}/.env"
 
+if [[ ! -f "$ENV_FILE" ]]; then
+  err ".env is missing; run ./install.sh first"
+  exit 1
+fi
+
 # shellcheck source=scripts/runtime-mode.sh
 source "${ROOT_DIR}/scripts/runtime-mode.sh"
-nexusiq_resolve_runtime_mode "$ENV_FILE"
+if ! nexusiq_resolve_runtime_mode "$ENV_FILE"; then
+  err "runtime mode configuration is invalid"
+  exit 1
+fi
 export NEXUS_AEON_ENABLED="$NEXUSIQ_AEON_ENABLED_NORMALIZED"
 
 banner "Doctor — required live health gate"
@@ -32,10 +40,16 @@ ok "doctor passed"
 
 if [[ "$NEXUSIQ_MEMORY_MODE" == "disabled" ]]; then
   banner "Nexus MCP handshake and tool listing"
-  bash "${ROOT_DIR}/scripts/smoke-nexus-execute.sh"
+  if ! bash "${ROOT_DIR}/scripts/smoke-nexus-execute.sh"; then
+    err "Nexus MCP execution smoke failed"
+    exit 1
+  fi
 
   banner "Nexus WASM execution and Proof Capsule"
-  bash "${ROOT_DIR}/scripts/smoke-proof-capsule.sh"
+  if ! bash "${ROOT_DIR}/scripts/smoke-proof-capsule.sh"; then
+    err "Proof Capsule smoke failed"
+    exit 1
+  fi
 
   banner "Verdict"
   ok "Nexus execution/proof plane verified; memory intentionally disabled."

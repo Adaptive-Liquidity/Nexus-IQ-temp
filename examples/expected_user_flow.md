@@ -4,6 +4,7 @@ This document narrates the explicit memory-mode flow in
 `./run-live-example.sh`. Core mode does not run the memory write, recall, or
 timeline legs; use `./verify-live-stack.sh` to verify Nexus execution and a
 real Proof Capsule without making a memory claim.
+
 ---
 
 ## Prerequisites

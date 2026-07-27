@@ -15,18 +15,28 @@ jobs:
   manifest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Generate pinned manifest + checksums
         run: |
           mkdir -p release
           TAG="${GITHUB_REF_NAME}"
-          # Pinned compose manifest: image refs resolved to this tag.
-          NEXUS_IMAGE="ghcr.io/adaptiveliquidity/nexusiq-nexus:${TAG#v}" \
-          AEON_IQ_IMAGE="ghcr.io/adaptiveliquidity/aeon-iq:${TAG#v}" \
-          POSTGRES_USER=x POSTGRES_PASSWORD=x POSTGRES_DB=x \
-          MANAGEMENT_API_KEY=x NEXUS_AEON_HMAC_KEY=x NEXUS_AGENTD_AUTH_TOKEN=x \
-            docker compose --profile memory --profile tools config > "release/docker-compose.${TAG}.pinned.yml"
+          # Resolve only release image refs. Runtime secrets remain environment
+          # references instead of known literal values.
+          MANIFEST="release/docker-compose.${TAG}.pinned.yml"
+          docker compose --profile memory --profile tools config --no-interpolate > "$MANIFEST"
+          sed -i \
+            -e "s#\${NEXUS_IMAGE:-nexusiq-nexus:local}#ghcr.io/adaptiveliquidity/nexusiq-nexus:${TAG#v}#g" \
+            -e "s#\${AEON_IQ_IMAGE:-nexusiq-aeon:local}#ghcr.io/adaptiveliquidity/aeon-iq:${TAG#v}#g" \
+            "$MANIFEST"
+          grep -Fq '${MANAGEMENT_API_KEY}' "$MANIFEST"
+          grep -Fq '${NEXUS_AGENTD_AUTH_TOKEN}' "$MANIFEST"
+          if grep -Eq '(^|[[:space:]])(POSTGRES_PASSWORD|MANAGEMENT_API_KEY|NEXUS_AEON_HMAC_KEY|NEXUS_AGENTD_AUTH_TOKEN): x$' "$MANIFEST"; then
+            echo "::error::release manifest contains known placeholder credentials"
+            exit 1
+          fi
           # Kit source checksums.
           find . -maxdepth 2 -type f \( -name "*.sh" -o -name "docker-compose.yml" -o -name "Dockerfile*" \) \
             -not -path "./release/*" -print0 | sort -z | xargs -0 sha256sum > "release/SHA256SUMS.${TAG}"
@@ -38,6 +48,6 @@ jobs:
           done
 
       - name: Attach to GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
           files: release/*

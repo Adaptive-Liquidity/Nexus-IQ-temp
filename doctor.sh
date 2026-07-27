@@ -14,6 +14,12 @@ fi
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 ENV_FILE="${ROOT_DIR}/.env"
+MGMT_HEADER_FILE=""
+
+cleanup_doctor() {
+  [[ -z "${MGMT_HEADER_FILE:-}" ]] || rm -f -- "$MGMT_HEADER_FILE"
+}
+trap cleanup_doctor EXIT
 
 FAILS=0
 WARNS=0
@@ -59,11 +65,11 @@ else
   fail "docker compose plugin not available"
 fi
 
-if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" || "$NEXUSIQ_MEMORY_MODE" == "disabled" ]]; then
+if [[ -f "$ENV_FILE" ]]; then
   if bash "${ROOT_DIR}/scripts/validate-env.sh" >/dev/null; then
     pass "configuration valid for memory ${NEXUSIQ_MEMORY_MODE}"
   else
-    fail "configuration invalid for memory ${NEXUSIQ_MEMORY_MODE}; run ./scripts/validate-env.sh"
+    fail "configuration invalid for memory ${NEXUSIQ_MEMORY_MODE:-unknown}; run ./scripts/validate-env.sh"
   fi
 fi
 
@@ -161,8 +167,11 @@ elif [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
   if [[ -z "$MGMT_KEY" ]]; then
     fail "MANAGEMENT_API_KEY missing — cannot test AEON authentication"
   else
+    MGMT_HEADER_FILE="$(mktemp)"
+    chmod 600 "$MGMT_HEADER_FILE"
+    printf 'X-Management-Key: %s\n' "$MGMT_KEY" >"$MGMT_HEADER_FILE"
     authed_code="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' \
-      -H "X-Management-Key: ${MGMT_KEY}" "${AEON_BASE}/api/v1/stats" 2>/dev/null || true)"
+      -H "@${MGMT_HEADER_FILE}" "${AEON_BASE}/api/v1/stats" 2>/dev/null || true)"
     unauth_code="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' \
       "${AEON_BASE}/api/v1/stats" 2>/dev/null || true)"
     if [[ "$authed_code" == "200" ]]; then
@@ -179,9 +188,7 @@ elif [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
 
   provider="$(printf '%s' "$(v UPSTREAM_PROVIDER)" | tr '[:upper:]' '[:lower:]')"
   case "$provider" in
-    openai) provider_value="$(v OPENAI_API_KEY)" ;;
-    anthropic) provider_value="$(v ANTHROPIC_API_KEY)" ;;
-    gemini) provider_value="$(v GEMINI_API_KEY)" ;;
+    openai|anthropic|gemini) provider_value="$(v OPENAI_API_KEY)" ;;
     ollama) provider_value="$(v UPSTREAM_BASE_URL)" ;;
     *) provider_value="" ;;
   esac
@@ -195,8 +202,11 @@ elif [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
   if [[ -z "$verifying_key" ]]; then
     warn "NEXUS_AEON_VERIFYING_KEY is not pinned; memory evidence remains Advisory"
   else
-    reported="$(curl -sf -H "X-Management-Key: ${MGMT_KEY}" \
-      "${AEON_BASE}/api/v1/evidence/verifying-key" 2>/dev/null || true)"
+    reported=""
+    if [[ -n "$MGMT_HEADER_FILE" ]]; then
+      reported="$(curl -sf -m 10 -H "@${MGMT_HEADER_FILE}" \
+        "${AEON_BASE}/api/v1/evidence/verifying-key" 2>/dev/null || true)"
+    fi
     reported_key="$(printf '%s' "$reported" | sed -n 's/.*"key_id":"\([0-9a-f]*\)".*/\1/p')"
     reported_persistent="$(printf '%s' "$reported" | grep -o '"persistent":[a-z]*' | cut -d: -f2)"
     if [[ -z "$reported_key" ]]; then

@@ -8,7 +8,7 @@ MCP, and Proof Capsules without the AEON memory plane.
 ## Prerequisites
 
 - Docker Engine + Compose v2 plugin ([install](https://docs.docker.com/engine/install/))
-- `bash`, `curl`, `git` on the host
+- Bash 4.0 or newer, `curl`, and `git` on the host
 
 No model-provider credential is required.
 

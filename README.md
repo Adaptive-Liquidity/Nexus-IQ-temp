@@ -100,7 +100,7 @@ Compose defines five services on an isolated network. Core mode starts only `nex
 
 - Docker Engine 24+ with the Compose v2 plugin;
 - about 2 GB RAM for core mode (more for memory mode);
-- `bash`, `curl`, and `git`;
+- Bash 4.0 or newer, `curl`, and `git`;
 - `jq` or `python3` for smoke scripts.
 
 A provider credential is required only for explicitly enabled memory mode.
@@ -121,8 +121,7 @@ It does not clone/build/pull AEON-IQ and does not pull PostgreSQL.
 To enable memory:
 
 ```bash
-# Configure a supported provider in .env first.
-sed -i 's/^NEXUS_AEON_ENABLED=.*/NEXUS_AEON_ENABLED=true/' .env
+# Configure a supported provider and set NEXUS_AEON_ENABLED=true in .env first.
 ./install.sh
 ./start.sh
 ./doctor.sh

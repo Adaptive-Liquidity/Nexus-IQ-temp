@@ -55,8 +55,10 @@ require_nonempty NEXUS_AGENTD_AUTH_TOKEN
 
 # Unauthenticated management and mock/test/synthetic switches are forbidden in
 # every mode, even when the affected service is intentionally not running.
-if is_truthy "$(v ALLOW_UNAUTH_MANAGEMENT)"; then
-  fail "ALLOW_UNAUTH_MANAGEMENT must be false (unauthenticated management is forbidden)"
+allow_unauth="$(printf '%s' "$(v ALLOW_UNAUTH_MANAGEMENT)" | tr '[:upper:]' '[:lower:]')"
+allow_unauth_count="${NEXUSIQ_ENV_OCCURRENCES[ALLOW_UNAUTH_MANAGEMENT]:-0}"
+if [[ "$allow_unauth_count" -gt 0 && "$allow_unauth" != "false" ]]; then
+  fail "ALLOW_UNAUTH_MANAGEMENT must be exactly false when set (unauthenticated management is forbidden)"
 fi
 for key in "${!NEXUSIQ_ENV[@]}"; do
   case "$key" in
@@ -72,6 +74,8 @@ if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
   for key in \
     POSTGRES_PASSWORD \
     MANAGEMENT_API_KEY \
+    POSTGRES_USER \
+    POSTGRES_DB \
     NEXUS_AEON_MANAGEMENT_KEY \
     NEXUS_AEON_HMAC_KEY \
     UPSTREAM_PROVIDER
@@ -97,17 +101,9 @@ if [[ "$NEXUSIQ_MEMORY_MODE" == "enabled" ]]; then
   provider="$(v UPSTREAM_PROVIDER)"
   provider_lc="$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')"
   case "$provider_lc" in
-    openai)
+    openai|anthropic|gemini)
       [[ -z "$(v OPENAI_API_KEY)" ]] &&
-        fail "UPSTREAM_PROVIDER=openai requires OPENAI_API_KEY to be set"
-      ;;
-    anthropic)
-      [[ -z "$(v ANTHROPIC_API_KEY)" ]] &&
-        fail "UPSTREAM_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set"
-      ;;
-    gemini)
-      [[ -z "$(v GEMINI_API_KEY)" ]] &&
-        fail "UPSTREAM_PROVIDER=gemini requires GEMINI_API_KEY to be set"
+        fail "UPSTREAM_PROVIDER=${provider_lc} requires OPENAI_API_KEY (AEON's single upstream-key slot) to be set"
       ;;
     ollama)
       [[ -z "$(v UPSTREAM_BASE_URL)" ]] &&

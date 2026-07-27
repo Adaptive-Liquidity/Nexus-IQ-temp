@@ -11,8 +11,14 @@
 #
 # The parser never sources, evals, expands, or prints .env values.
 
-declare -gA NEXUSIQ_ENV=()
-declare -gA NEXUSIQ_ENV_OCCURRENCES=()
+if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+  printf 'runtime-mode: bash 4.0+ is required (found %s). On macOS, install a current Bash first.\n' \
+    "${BASH_VERSION:-unknown}" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+declare -A NEXUSIQ_ENV=()
+declare -A NEXUSIQ_ENV_OCCURRENCES=()
 NEXUSIQ_MEMORY_MODE=""
 NEXUSIQ_MEMORY_MODE_EXPLICIT=""
 NEXUSIQ_AEON_ENABLED_NORMALIZED=""
@@ -54,10 +60,19 @@ nexusiq_load_env() {
     key="${key%"${key##*[![:space:]]}"}"
     [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
 
-    if [[ "$val" == \"*\" && "$val" == *\" ]]; then
-      val="${val:1:${#val}-2}"
-    elif [[ "$val" == \'*\' && "$val" == *\' ]]; then
-      val="${val:1:${#val}-2}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    if [[ "$val" == \"* ]]; then
+      if [[ "$val" =~ ^\"(.*)\"[[:space:]]*(#.*)?$ ]]; then
+        val="${BASH_REMATCH[1]}"
+      fi
+    elif [[ "$val" == \'* ]]; then
+      if [[ "$val" =~ ^\'(.*)\'[[:space:]]*(#.*)?$ ]]; then
+        val="${BASH_REMATCH[1]}"
+      fi
+    else
+      # Compose starts an unquoted inline comment at whitespace + '#'.
+      val="${val%%[[:space:]]#*}"
+      val="${val%"${val##*[![:space:]]}"}"
     fi
 
     NEXUSIQ_ENV["$key"]="$val"

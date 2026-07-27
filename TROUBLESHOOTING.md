@@ -144,7 +144,7 @@ like `OPENAI_API_KEY` intact), then re-run:
 
 ```bash
 ./scripts/generate-secrets.sh
-docker compose restart
+./start.sh
 ```
 
 ---
@@ -174,5 +174,5 @@ management plane auth is disabled`.
 ALLOW_UNAUTH_MANAGEMENT=false
 ```
 
-Then restart AEON: `docker compose --profile memory restart aeon`. Never leave this enabled in
-any real deployment.
+Then apply the selected service set with `./start.sh`. Never leave this enabled
+in any real deployment.

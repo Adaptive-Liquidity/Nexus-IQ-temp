@@ -25,6 +25,10 @@ fail() {
 assert_success() {
   local name="$1"
   shift
+  if [[ "$#" -eq 0 ]]; then
+    fail "${name} (no command supplied)"
+    return
+  fi
   if "$@" >"${TMP_DIR}/stdout" 2>"${TMP_DIR}/stderr"; then
     pass "$name"
   else
@@ -36,6 +40,10 @@ assert_success() {
 assert_failure_matching() {
   local name="$1" pattern="$2"
   shift 2
+  if [[ "$#" -eq 0 ]]; then
+    fail "${name} (no command supplied)"
+    return
+  fi
   if "$@" >"${TMP_DIR}/stdout" 2>"${TMP_DIR}/stderr"; then
     fail "${name} (unexpected success)"
   elif grep -Eiq -- "$pattern" "${TMP_DIR}/stdout" "${TMP_DIR}/stderr"; then
@@ -66,6 +74,14 @@ resolver_output_is() {
   fi
 }
 
+resolver_value_is() {
+  local env_file="$1" key="$2" expected="$3"
+  # shellcheck source=scripts/runtime-mode.sh
+  source "${ROOT_DIR}/scripts/runtime-mode.sh"
+  nexusiq_resolve_runtime_mode "$env_file" >/dev/null
+  [[ "$(nexusiq_env_get "$key")" == "$expected" ]]
+}
+
 resolver_normalized_is() {
   local env_file="$1" expected="$2"
   # shellcheck source=scripts/runtime-mode.sh
@@ -86,6 +102,17 @@ run_validator() {
   bash "${isolated}/scripts/validate-env.sh"
 }
 
+generate_secrets_preserves_line_boundary() {
+  local isolated="${TMP_DIR}/generate-secrets"
+  mkdir -p "${isolated}/scripts"
+  cp "${ROOT_DIR}/scripts/generate-secrets.sh" "${isolated}/scripts/generate-secrets.sh"
+  cp "${ROOT_DIR}/scripts/runtime-mode.sh" "${isolated}/scripts/runtime-mode.sh"
+  printf 'NEXUS_AEON_ENABLED=false' >"${isolated}/.env"
+  (cd "$isolated" && bash ./scripts/generate-secrets.sh >/dev/null)
+  grep -qx 'NEXUS_AEON_ENABLED=false' "${isolated}/.env" &&
+    grep -Eq '^NEXUS_AGENTD_AUTH_TOKEN=[0-9a-f]{64}$' "${isolated}/.env"
+}
+
 TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 MGMT='abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
 HMAC='1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
@@ -97,7 +124,7 @@ write_env "$FALSE_ENV" \
   'ALLOW_UNAUTH_MANAGEMENT=false'
 assert_success "explicit false is memory-disabled, case-insensitive" \
   resolver_output_is "$FALSE_ENV" disabled
-assert_success "case-insensitive false is canonicalized for Compose"
+assert_success "case-insensitive false is canonicalized for Compose" \
   resolver_normalized_is "$FALSE_ENV" false
 
 TRUE_ENV="${TMP_DIR}/true.env"
@@ -105,7 +132,7 @@ write_env "$TRUE_ENV" \
   'NEXUS_AEON_ENABLED=TRUE'
 assert_success "explicit true is memory-enabled, case-insensitive" \
   resolver_output_is "$TRUE_ENV" enabled
-assert_success "case-insensitive true is canonicalized for Compose"
+assert_success "case-insensitive true is canonicalized for Compose" \
   resolver_normalized_is "$TRUE_ENV" true
 
 LEGACY_ENV="${TMP_DIR}/legacy.env"
@@ -131,6 +158,16 @@ write_env "$PROVIDER_CONFIG_ENV" \
 assert_success "provider configuration presence does not auto-enable memory" \
   resolver_output_is "$PROVIDER_CONFIG_ENV" disabled
 
+COMMENTED_FALSE_ENV="${TMP_DIR}/commented-false.env"
+write_env "$COMMENTED_FALSE_ENV" \
+  'NEXUS_AEON_ENABLED=false # core mode' \
+  "NEXUS_AGENTD_AUTH_TOKEN=${TOKEN}" \
+  'ALLOW_UNAUTH_MANAGEMENT=false # authentication remains required'
+assert_success "Compose-style inline comments preserve explicit false mode" \
+  resolver_output_is "$COMMENTED_FALSE_ENV" disabled
+assert_success "safe inline comments remain valid during core validation" \
+  run_validator "$COMMENTED_FALSE_ENV"
+
 assert_success "disabled validation needs only the execution-plane token" \
   run_validator "$FALSE_ENV"
 if grep -Eiq 'memory.*disabled' "${TMP_DIR}/stdout"; then
@@ -143,11 +180,21 @@ if ! grep -Eiq 'provider key OK' "${TMP_DIR}/stdout" "${TMP_DIR}/stderr"; then
 else
   fail "disabled validator does not claim provider-key success"
 fi
+QUOTED_HASH_ENV="${TMP_DIR}/quoted-hash.env"
+write_env "$QUOTED_HASH_ENV" \
+  'NEXUS_AEON_ENABLED="false" # core mode' \
+  'NEXUS_AGENTD_AUTH_TOKEN="value#keeps-hash"' \
+  "ALLOW_UNAUTH_MANAGEMENT='false' # safe"
+assert_success "quoted values preserve hash characters while trailing comments are removed" \
+  resolver_value_is "$QUOTED_HASH_ENV" NEXUS_AGENTD_AUTH_TOKEN 'value#keeps-hash'
+
 
 ENABLED_MISSING_PROVIDER="${TMP_DIR}/enabled-missing-provider.env"
 write_env "$ENABLED_MISSING_PROVIDER" \
   'NEXUS_AEON_ENABLED=true' \
+  'POSTGRES_USER=nexusiq' \
   "POSTGRES_PASSWORD=${TOKEN}" \
+  'POSTGRES_DB=nexusiq' \
   "MANAGEMENT_API_KEY=${MGMT}" \
   "NEXUS_AEON_MANAGEMENT_KEY=${MGMT}" \
   "NEXUS_AEON_HMAC_KEY=${HMAC}" \
@@ -162,19 +209,21 @@ assert_failure_matching "enabled validation fails closed without its provider" \
 ANTHROPIC_MISSING_PROVIDER="${TMP_DIR}/anthropic-missing-provider.env"
 sed 's/^UPSTREAM_PROVIDER=.*/UPSTREAM_PROVIDER=anthropic/' \
   "$ENABLED_MISSING_PROVIDER" >"$ANTHROPIC_MISSING_PROVIDER"
-assert_failure_matching "enabled Anthropic mode preserves its named-key requirement" \
-  'anthropic.*ANTHROPIC_API_KEY|ANTHROPIC_API_KEY.*required' run_validator "$ANTHROPIC_MISSING_PROVIDER"
+assert_failure_matching "enabled Anthropic mode preserves AEON's upstream-key requirement" \
+  'anthropic.*OPENAI_API_KEY|OPENAI_API_KEY.*required' run_validator "$ANTHROPIC_MISSING_PROVIDER"
 
 GEMINI_MISSING_PROVIDER="${TMP_DIR}/gemini-missing-provider.env"
 sed 's/^UPSTREAM_PROVIDER=.*/UPSTREAM_PROVIDER=gemini/' \
   "$ENABLED_MISSING_PROVIDER" >"$GEMINI_MISSING_PROVIDER"
-assert_failure_matching "enabled Gemini mode preserves its named-key requirement" \
-  'gemini.*GEMINI_API_KEY|GEMINI_API_KEY.*required' run_validator "$GEMINI_MISSING_PROVIDER"
+assert_failure_matching "enabled Gemini mode preserves AEON's upstream-key requirement" \
+  'gemini.*OPENAI_API_KEY|OPENAI_API_KEY.*required' run_validator "$GEMINI_MISSING_PROVIDER"
 
 ENABLED_COMPLETE="${TMP_DIR}/enabled-complete.env"
 write_env "$ENABLED_COMPLETE" \
   'NEXUS_AEON_ENABLED=true' \
+  'POSTGRES_USER=nexusiq' \
   "POSTGRES_PASSWORD=${TOKEN}" \
+  'POSTGRES_DB=nexusiq' \
   "MANAGEMENT_API_KEY=${MGMT}" \
   "NEXUS_AEON_MANAGEMENT_KEY=${MGMT}" \
   "NEXUS_AEON_HMAC_KEY=${HMAC}" \
@@ -184,11 +233,22 @@ write_env "$ENABLED_COMPLETE" \
   'UPSTREAM_BASE_URL=http://127.0.0.1:11434'
 assert_success "enabled validation accepts complete Ollama configuration without a fake key" \
   run_validator "$ENABLED_COMPLETE"
+
 if grep -Eiq 'memory.*enabled' "${TMP_DIR}/stdout"; then
   pass "enabled validator verdict is mode-specific"
 else
   fail "enabled validator verdict is mode-specific"
 fi
+
+MISSING_POSTGRES_USER_ENV="${TMP_DIR}/missing-postgres-user.env"
+grep -v '^POSTGRES_USER=' "$ENABLED_COMPLETE" >"$MISSING_POSTGRES_USER_ENV"
+assert_failure_matching "enabled mode requires POSTGRES_USER" \
+  'POSTGRES_USER.*missing|POSTGRES_USER.*required' run_validator "$MISSING_POSTGRES_USER_ENV"
+
+MISSING_POSTGRES_DB_ENV="${TMP_DIR}/missing-postgres-db.env"
+grep -v '^POSTGRES_DB=' "$ENABLED_COMPLETE" >"$MISSING_POSTGRES_DB_ENV"
+assert_failure_matching "enabled mode requires POSTGRES_DB" \
+  'POSTGRES_DB.*missing|POSTGRES_DB.*required' run_validator "$MISSING_POSTGRES_DB_ENV"
 
 LEGACY_COMPLETE="${TMP_DIR}/legacy-complete.env"
 grep -v '^NEXUS_AEON_ENABLED=' "$ENABLED_COMPLETE" >"$LEGACY_COMPLETE"
@@ -219,11 +279,26 @@ assert_failure_matching "core mode never permits unauthenticated management flag
   'ALLOW_UNAUTH_MANAGEMENT.*(forbidden|NOT be true|must.*false)' \
   run_validator "$UNAUTH_ENV"
 
+COMMENTED_UNAUTH_ENV="${TMP_DIR}/commented-unauth.env"
+cp "$FALSE_ENV" "$COMMENTED_UNAUTH_ENV"
+sed -i 's/^ALLOW_UNAUTH_MANAGEMENT=.*/ALLOW_UNAUTH_MANAGEMENT=true # unsafe/' "$COMMENTED_UNAUTH_ENV"
+assert_failure_matching "inline comments cannot conceal unauthenticated management" \
+  'ALLOW_UNAUTH_MANAGEMENT.*(forbidden|must.*false)' run_validator "$COMMENTED_UNAUTH_ENV"
+
+EMPTY_UNAUTH_ENV="${TMP_DIR}/empty-unauth.env"
+cp "$FALSE_ENV" "$EMPTY_UNAUTH_ENV"
+sed -i 's/^ALLOW_UNAUTH_MANAGEMENT=.*/ALLOW_UNAUTH_MANAGEMENT=/' "$EMPTY_UNAUTH_ENV"
+assert_failure_matching "an explicitly empty unauthenticated-management setting fails closed" \
+  'ALLOW_UNAUTH_MANAGEMENT.*must.*false' run_validator "$EMPTY_UNAUTH_ENV"
+
 MOCK_ENV="${TMP_DIR}/mock.env"
 cp "$FALSE_ENV" "$MOCK_ENV"
 printf '%s\n' 'MOCK_PROVIDER=true' >>"$MOCK_ENV"
 assert_failure_matching "core mode preserves mock/test flag prohibition" \
   'mock/test.*not allowed|MOCK_PROVIDER' run_validator "$MOCK_ENV"
+
+assert_success "secret generation preserves a missing final newline" \
+  generate_secrets_preserves_line_boundary
 
 printf '\n%d passed; %d failed\n' "$PASSES" "$FAILURES"
 [[ "$FAILURES" -eq 0 ]]

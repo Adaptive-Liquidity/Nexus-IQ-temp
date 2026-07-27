@@ -71,6 +71,9 @@ set_val() {
     ' "$ENV_FILE" >"$tmp"
   else
     cp "$ENV_FILE" "$tmp"
+    if [[ -s "$tmp" && -n "$(tail -c 1 "$tmp")" ]]; then
+      printf '\n' >>"$tmp"
+    fi
     KEY="$key" VALUE="$value" awk \
       'BEGIN { print ENVIRON["KEY"] "=" ENVIRON["VALUE"] }' >>"$tmp"
   fi

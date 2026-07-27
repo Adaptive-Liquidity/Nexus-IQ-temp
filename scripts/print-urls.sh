@@ -14,9 +14,17 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 
+if [[ ! -f "$ENV_FILE" ]]; then
+  printf 'print-urls: .env is missing; run ./install.sh first.\n' >&2
+  exit 1
+fi
+
 # shellcheck source=scripts/runtime-mode.sh
 source "${SCRIPT_DIR}/runtime-mode.sh"
-nexusiq_resolve_runtime_mode "$ENV_FILE"
+if ! nexusiq_resolve_runtime_mode "$ENV_FILE"; then
+  printf 'print-urls: runtime mode configuration is invalid.\n' >&2
+  exit 1
+fi
 
 printf '\n%s%sNexusIQ — active surfaces%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
 printf '  %sMemory%s              %s\n' "$C_BOLD" "$C_RESET" "$NEXUSIQ_MEMORY_MODE"

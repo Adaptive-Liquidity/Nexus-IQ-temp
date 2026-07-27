@@ -24,15 +24,15 @@ services:
     restart: unless-stopped
     mem_limit: 1g
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: ${POSTGRES_DB:-}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - nexusiq
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-} -d ${POSTGRES_DB:-}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -56,11 +56,11 @@ services:
     environment:
       # DATABASE_URL is DERIVED from the POSTGRES_* secrets so the password
       # lives in exactly one place (.env). Do not hard-code it elsewhere.
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-}:${POSTGRES_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}
 
       # Management API auth. MANAGEMENT_API_KEY MUST match the Nexus client's
       # NEXUS_AEON_MANAGEMENT_KEY (set below in nexus-agentd / nexus-mcp).
-      MANAGEMENT_API_KEY: ${MANAGEMENT_API_KEY}
+      MANAGEMENT_API_KEY: ${MANAGEMENT_API_KEY:-}
       ALLOW_UNAUTH_MANAGEMENT: ${ALLOW_UNAUTH_MANAGEMENT:-false}
 
       # Upstream LLM / embedding provider.
@@ -71,7 +71,7 @@ services:
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
       EXTRACTOR_MODEL: ${EXTRACTOR_MODEL:-gpt-4o-mini}
       EXTRACTOR_BASE_URL: ${EXTRACTOR_BASE_URL:-https://api.openai.com}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Required when UPSTREAM_BASE_URL / EMBEDDING_BASE_URL / EXTRACTOR_BASE_URL
       # use http:// or resolve to a private/loopback address (e.g. Ollama on
       # host.docker.internal). Never set this to true in a public deployment.
@@ -122,8 +122,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      MANAGEMENT_API_KEY: ${MANAGEMENT_API_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-}:${POSTGRES_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}
+      MANAGEMENT_API_KEY: ${MANAGEMENT_API_KEY:-}
       ALLOW_UNAUTH_MANAGEMENT: ${ALLOW_UNAUTH_MANAGEMENT:-false}
       UPSTREAM_PROVIDER: ${UPSTREAM_PROVIDER:-openai}
       UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-https://api.openai.com}
@@ -132,7 +132,7 @@ services:
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
       EXTRACTOR_MODEL: ${EXTRACTOR_MODEL:-gpt-4o-mini}
       EXTRACTOR_BASE_URL: ${EXTRACTOR_BASE_URL:-https://api.openai.com}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       AEON_ALLOW_INSECURE_PROVIDER_URLS: ${AEON_ALLOW_INSECURE_PROVIDER_URLS:-false}
       AEON_EVIDENCE_SIGNING_KEY: ${AEON_EVIDENCE_SIGNING_KEY:-}
       PORT: "8080"
@@ -174,8 +174,8 @@ services:
       NEXUS_AEON_ENABLED: ${NEXUS_AEON_ENABLED:-true}
       NEXUS_AEON_BASE_URL: ${NEXUS_AEON_BASE_URL:-http://aeon:8080}
       # MUST equal the AEON service's MANAGEMENT_API_KEY (same secret).
-      NEXUS_AEON_MANAGEMENT_KEY: ${MANAGEMENT_API_KEY}
-      NEXUS_AEON_HMAC_KEY: ${NEXUS_AEON_HMAC_KEY}
+      NEXUS_AEON_MANAGEMENT_KEY: ${MANAGEMENT_API_KEY:-}
+      NEXUS_AEON_HMAC_KEY: ${NEXUS_AEON_HMAC_KEY:-}
       NEXUS_AEON_VERIFYING_KEY: ${NEXUS_AEON_VERIFYING_KEY:-}
       NEXUS_AEON_AGENT_ID: ${NEXUS_AEON_AGENT_ID:-nexusiq}
       NEXUS_AEON_SESSION_ID: ${NEXUS_AEON_SESSION_ID:-default}
@@ -227,8 +227,8 @@ services:
       # ── AEON memory client (mirrors nexus-agentd) ──
       NEXUS_AEON_ENABLED: ${NEXUS_AEON_ENABLED:-true}
       NEXUS_AEON_BASE_URL: ${NEXUS_AEON_BASE_URL:-http://aeon:8080}
-      NEXUS_AEON_MANAGEMENT_KEY: ${MANAGEMENT_API_KEY}
-      NEXUS_AEON_HMAC_KEY: ${NEXUS_AEON_HMAC_KEY}
+      NEXUS_AEON_MANAGEMENT_KEY: ${MANAGEMENT_API_KEY:-}
+      NEXUS_AEON_HMAC_KEY: ${NEXUS_AEON_HMAC_KEY:-}
       NEXUS_AEON_VERIFYING_KEY: ${NEXUS_AEON_VERIFYING_KEY:-}
       NEXUS_AEON_AGENT_ID: ${NEXUS_AEON_AGENT_ID:-nexusiq}
       NEXUS_AEON_SESSION_ID: ${NEXUS_AEON_SESSION_ID:-default}
