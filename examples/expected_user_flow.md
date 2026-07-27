@@ -1,13 +1,16 @@
-# Expected User Flow: run-live-example.sh
+# Expected Memory-Mode User Flow: run-live-example.sh
 
-This document narrates what `./run-live-example.sh` does and what output to
-expect at each step. All steps run live against the running stack — no mocks.
-
+This document narrates the explicit memory-mode flow in
+`./run-live-example.sh`. Core mode does not run the memory write, recall, or
+timeline legs; use `./verify-live-stack.sh` to verify Nexus execution and a
+real Proof Capsule without making a memory claim.
 ---
 
 ## Prerequisites
 
-- `./start.sh` has been run and `./doctor.sh` shows all `PASS`
+- `.env` contains `NEXUS_AEON_ENABLED=true`
+- a real provider is configured
+- `./start.sh` has been run and `./doctor.sh` passes the memory checks
 - `OPENAI_API_KEY` is set in `.env` (required for steps a and b)
 - `data/modules/sample_tool.wasm` exists (created by `./install.sh`)
 
@@ -98,7 +101,7 @@ The script sends three JSON-RPC 2.0 messages to `connect-mcp.sh` over stdin:
 2. `notifications/initialized` — client ready notification
 3. `tools/call nexus_execute_proof` — execute `sample_tool.wasm`
 
-`connect-mcp.sh` starts `nexus-mcp` via `docker compose run --rm -T nexus-mcp`
+`connect-mcp.sh` starts `nexus-mcp` with `--no-deps` after verifying the already-running `nexus-agentd`
 and pipes the messages through. `nexus-mcp` forwards the execution request to
 `nexus-agentd` over the Unix socket.
 

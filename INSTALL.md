@@ -1,119 +1,116 @@
 # Installation
 
-NexusIQ uses **MCP over STDIO only** for execution. There is no REST/OpenAPI execution gateway.
+NexusIQ uses MCP over STDIO for execution. There is no REST/OpenAPI execution
+gateway. The default installation is the provider-keyless core mode.
 
-This guide is based on the repository’s actual scripts and config files.
-
-## Path A: Fast local demo
-
-Use this for first-run local testing.
+## Core mode: default quickstart
 
 ```bash
-git clone <repo-url>
-cd sprint3-docs
-
-cp .env.example .env
-```
-
-Edit `.env` and set:
-
-```bash
-OPENAI_API_KEY=<your-openai-key>
-```
-
-Then run:
-
-```bash
-./install.sh
-./start.sh         # starts postgres, aeon, nexus-agentd
+git clone https://github.com/Adaptive-Liquidity/Nexus-IQ-temp.git
+cd Nexus-IQ-temp
+./install.sh --start
 ./doctor.sh
-./generate-mcp-config.sh
-./run-live-example.sh   # optional end-to-end check
 ```
 
-If you prefer manual compose control, you can start with:
+No OpenAI, Anthropic, Gemini, or Ollama configuration is required. On a fresh
+install, `install.sh` creates `.env` from `.env.example`, where:
 
-```bash
-docker compose up -d postgres aeon nexus-agentd
+```dotenv
+NEXUS_AEON_ENABLED=false
 ```
 
-`nexus-mcp` is **not** part of this startup; it is launched per session by MCP.
+The installer generates `NEXUS_AGENTD_AUTH_TOKEN`, vendors only the pinned
+Nexus source, builds only the Nexus image, creates the proof/timeline/module
+directories, and bakes `data/modules/sample_tool.wasm`. It does not clone or
+build AEON-IQ and does not pull the PostgreSQL image.
 
-## Path B: Developer install
+Core mode provides:
 
-Use local source checkouts when you need iteration on Nexus/AEON:
+- Nexus WASM execution and sandboxing;
+- Proof Capsule generation;
+- on-demand `nexus-mcp` through an authenticated `nexus-agentd`;
+- no memory write, recall, or AEON timeline service.
 
-```bash
-export NEXUSIQ_VENDOR_NEXUS=/path/to/Nexus
-export NEXUSIQ_VENDOR_AEON=/path/to/AEON-IQ
+Use `./generate-mcp-config.sh` after installation to create MCP client
+configuration.
 
-cp .env.openai.example .env   # or another preset
-./install.sh --build-local
-./start.sh
-```
+## Memory mode: explicit opt-in
 
-`install.sh` will:
+Memory mode adds PostgreSQL, the AEON proxy, and the AEON worker. It is never
+enabled because a provider key happens to be present.
 
-- validate Docker + compose
-- generate missing secrets via `scripts/generate-secrets.sh`
-- validate with `scripts/validate-env.sh`
-- vendor `NEXUSIQ_VENDOR_NEXUS` into `./vendor/nexus`
-- vendor `NEXUSIQ_VENDOR_AEON` into `./vendor/aeon-iq`
-- build Docker images
-- create `./data/{proofs,timeline,modules,logs,run}`
-- bake `./data/modules/sample_tool.wasm`
-
-Use `./generate-mcp-config.sh` to point MCP clients at this repo path.
-
-## Path C: Production-ish self-hosted install
-
-Use a provider preset as the source of truth for runtime values:
-
-| Preset | Embedding dim | Schema change? |
-|---|---|---|
-| `.env.openai.example` | 1536 | No — MVP default |
-| `.env.anthropic.example` | 1536 (uses OpenAI embeddings) | No |
-| `.env.gemini.example` | 768 | **Yes — edit migration first** |
-| `.env.ollama.example` | varies by model | **Yes — edit migration first** |
-| `.env.minimal.example` | 1536 | No |
-
-> **Gemini / Ollama users:** read the `SCHEMA CHANGE REQUIRED` block at the top
-> of the matching `.env.<provider>.example` file and update
-> `vendor/aeon-iq/migrations/0001_initial.sql` **before** running `./install.sh`.
-> Initialising the database with the wrong dimension requires a full volume reset.
-
-Example (OpenAI — no schema changes):
-
-```bash
-cp .env.openai.example .env
-```
-
-Set the required provider key in that file (`OPENAI_API_KEY` for all current presets) and any provider-specific overrides.
-
-Then run:
+1. Start with `.env.example` or the appropriate `.env.<provider>.example`.
+2. Set `NEXUS_AEON_ENABLED=true`.
+3. Configure a supported provider and its required credential or Ollama URL.
+4. Run:
 
 ```bash
 ./install.sh
 ./start.sh
+./doctor.sh
 ./verify-live-stack.sh
 ```
 
-Important key handling:
+Validation runs before vendoring, building, pulling, or starting. An explicit
+memory request fails closed if PostgreSQL/AEON secrets, management-key
+cross-wiring, HMAC material, or provider configuration is missing.
 
-- You must not invent env values; keep secrets in `.env` only.
-- `MANAGEMENT_API_KEY` is the shared management secret used by AEON and Nexus.
-- `NEXUS_AEON_HMAC_KEY` is required for MemoryEvidence provenance binding.
-- `NEXUS_AGENTD_AUTH_TOKEN` is required between `nexus-mcp` and `nexus-agentd`.
-- `install.sh` sets `NEXUSIQ_UID` and `NEXUSIQ_GID` automatically.
-- The compose file maps `NEXUS_AEON_MANAGEMENT_KEY` to `${MANAGEMENT_API_KEY}` internally; do not set it separately.
+Provider presets:
 
-If you need manual checks:
+| Preset | Embedding dimension | Schema change? |
+|---|---:|---|
+| `.env.openai.example` | 1536 | No |
+| `.env.anthropic.example` | 1536 (OpenAI-compatible embedding configuration) | No |
+| `.env.gemini.example` | 768 | Yes; read the preset warning |
+| `.env.ollama.example` | Model-dependent | Yes; read the preset warning |
 
-- `bash ./scripts/validate-env.sh` checks required keys and provider-specific requirements.
-- `./scripts/generate-secrets.sh` regenerates the secret block in place.
+Gemini and Ollama operators must follow the schema warning in the preset before
+initializing PostgreSQL. This kit does not alter the pinned product sources or
+their migrations automatically.
 
-## Notes
+## Local source checkouts
 
-- `docker-compose.yml` contains all service wiring and `NEXUS_AEON_MANAGEMENT_KEY` wiring.
-- `start.sh` waits for container health via `scripts/wait-for-health.sh`.
-- MCP config files are generated by `generate-mcp-config.sh` into `mcp/claude-desktop.json`, `mcp/cursor.json`, `mcp/openhands.json`, `mcp/generic-mcp.json`.
+Core mode needs only Nexus:
+
+```bash
+NEXUSIQ_VENDOR_NEXUS=/path/to/Nexus ./install.sh --build-local
+```
+
+Memory mode accepts both source checkouts:
+
+```bash
+NEXUSIQ_VENDOR_NEXUS=/path/to/Nexus \
+NEXUSIQ_VENDOR_AEON=/path/to/AEON-IQ \
+./install.sh --build-local
+```
+
+The source refs in `install.sh` and `VERSION_MATRIX.md` remain the reproducible
+defaults when local checkouts are not supplied.
+
+## Prebuilt images
+
+Set `NEXUSIQ_USE_PREBUILT=true` and a release tag:
+
+```bash
+NEXUSIQ_USE_PREBUILT=true NEXUSIQ_IMAGE_TAG=<release-tag> ./install.sh
+```
+
+Core mode pulls only the Nexus image. Memory mode pulls Nexus, AEON, and
+PostgreSQL. If release images are unavailable, use the source-build default;
+do not substitute a provider placeholder.
+
+## Compatibility behavior
+
+For an existing custom `.env` that does not contain `NEXUS_AEON_ENABLED`, the
+lifecycle scripts enable memory for backward compatibility and print a warning
+requesting an explicit value. Empty or malformed values are configuration
+errors. Only case-insensitive `true` and `false` are accepted.
+
+## Security material
+
+- `NEXUS_AGENTD_AUTH_TOKEN` is always required and generated when blank.
+- `POSTGRES_PASSWORD`, `MANAGEMENT_API_KEY`, `NEXUS_AEON_MANAGEMENT_KEY`,
+  `NEXUS_AEON_HMAC_KEY`, and `AEON_EVIDENCE_SIGNING_KEY` are generated only
+  for memory mode.
+- `ALLOW_UNAUTH_MANAGEMENT` may not be truthy in either mode.
+- `.env` is parsed as data and is never sourced or executed.

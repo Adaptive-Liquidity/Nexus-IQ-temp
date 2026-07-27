@@ -1,98 +1,59 @@
 # NexusIQ Troubleshooting
 
-Run `./doctor.sh` first. It checks every subsystem live and prints `PASS` or
-`FAIL` with a plain-English description. Diagnose from there.
+Run `./doctor.sh` first. It resolves the configured mode, checks only the
+required live service set, and prints explicit PASS, FAIL, WARN, or INFO lines.
 
----
+## Unexpected runtime mode
+
+Only case-insensitive `true` and `false` are accepted:
+
+```dotenv
+NEXUS_AEON_ENABLED=false
+```
+
+If the key is absent in an older custom `.env`, memory is enabled for backward
+compatibility and every lifecycle command prints a warning. Add an explicit
+value. Empty values and aliases such as `yes`, `1`, or `off` are errors.
+
+A provider key does not enable memory automatically.
 
 ## Docker not running
 
-**Symptom:** `./install.sh` or `./start.sh` prints "Docker daemon is not
-reachable" or "docker: command not found".
-
-**Fix:** Start Docker Desktop (macOS/Windows) or `sudo systemctl start docker`
-(Linux). Verify with `docker info`.
-
----
+Start Docker Desktop or the Docker Engine, then verify `docker info` and
+`docker compose version` before re-running the installer.
 
 ## Port 8080 already in use
 
-**Symptom:** `./start.sh` fails with "address already in use" or AEON's health
-check never passes.
+This matters only in memory mode because core mode does not publish AEON. Set a
+free `AEON_PORT` in `.env`, then run `./stop.sh && ./start.sh`.
 
-**Fix:** Find and stop whatever is using 8080:
+## Missing provider configuration
 
-```bash
-lsof -i :8080       # macOS/Linux
-netstat -ano | findstr :8080   # Windows PowerShell
-```
-
-Or change the port in `.env`:
-
-```
-AEON_PORT=8081
-```
-
-Then restart: `./stop.sh && ./start.sh`. If you change the port, regenerate
-MCP configs: `./generate-mcp-config.sh`.
-
----
-
-## Missing or invalid OPENAI_API_KEY
-
-**Symptom:** `./doctor.sh` shows `WARN no provider key for
-UPSTREAM_PROVIDER=openai`. Memory writes and recall fail with HTTP 4xx or an
-embedding error. `nexus_execute_proof` still works — it does not need a key.
-
-**Fix:** Set a valid key in `.env`:
-
-```
-OPENAI_API_KEY=sk-...
-```
-
-Then restart AEON only (the key is read at startup):
+Core mode does not require a provider. If `NEXUS_AEON_ENABLED=true`,
+`./scripts/validate-env.sh` fails before build/start and names the missing key
+or Ollama URL. Configure the selected provider, then re-run:
 
 ```bash
-docker compose restart aeon
+./install.sh
+./start.sh
 ```
 
----
+The lifecycle never falls back to core mode after memory was explicitly
+requested.
 
-## AEON build is slow on first run
+## AEON build is slow or AEON was not vendored
 
-**Symptom:** `./install.sh` appears to hang at the `Building images` step for
-many minutes.
+Core mode intentionally does not create `vendor/aeon-iq` and does not build an
+AEON image. That is expected, not a failure.
 
-**Explanation:** The first build compiles AEON-IQ and Nexus from Rust source.
-This is normal and can take 5–15 minutes depending on CPU speed and whether
-you have `sccache` configured. Subsequent runs use Docker's layer cache and
-are fast.
-
-**What to do:** Wait. You can follow progress in another terminal:
-
-```bash
-docker compose build --progress plain
-```
-
----
-
-## vendor/ not populated (clone failed)
-
-**Symptom:** `./install.sh` prints "Failed to clone Nexus" or "Could not clone
-AEON-IQ" and exits.
-
-**Fix:** If you have local checkouts of the repos, point the installer at them:
+In memory mode the first AEON/Nexus source build may take several minutes. If a
+source checkout cannot be cloned, provide it explicitly:
 
 ```bash
 NEXUSIQ_VENDOR_NEXUS=/path/to/Nexus \
 NEXUSIQ_VENDOR_AEON=/path/to/AEON-IQ \
 ./install.sh
 ```
-
-The installer will symlink those directories into `./vendor/` instead of
-cloning. The source must contain the expected Dockerfiles.
-
----
 
 ## MCP client cannot find connect-mcp.sh
 
@@ -140,8 +101,7 @@ docker compose ps nexus-agentd
 ```
 
 Common causes:
-- AEON was not healthy when `nexus-agentd` started (it depends on AEON).
-  Restart: `docker compose restart nexus-agentd`.
+- The selected service set did not pass startup validation or health checks. Re-run `./start.sh`; it starts memory services before agentd only when memory is enabled.
 - The image build failed or was not run. Re-run `./install.sh`.
 
 ---
@@ -198,7 +158,7 @@ connect-mcp.sh)`.
 1. Is `nexus-agentd` healthy? (`docker compose ps nexus-agentd`)
 2. Does the `agentd_run` volume exist and contain the socket?
    (`docker compose exec nexus-agentd test -S /run/nexus/nexus-agentd.sock`)
-3. Is the `nexus-mcp` image built? (`docker compose build nexus-mcp`)
+3. Is the `nexus-mcp` image built? (`docker compose --profile tools build nexus-mcp`)
 4. Check logs: `./logs.sh nexus-agentd`
 
 ---
@@ -214,5 +174,5 @@ management plane auth is disabled`.
 ALLOW_UNAUTH_MANAGEMENT=false
 ```
 
-Then restart AEON: `docker compose restart aeon`. Never leave this enabled in
+Then restart AEON: `docker compose --profile memory restart aeon`. Never leave this enabled in
 any real deployment.
