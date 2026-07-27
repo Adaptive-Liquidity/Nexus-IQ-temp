@@ -113,6 +113,33 @@ generate_secrets_preserves_line_boundary() {
     grep -Eq '^NEXUS_AGENTD_AUTH_TOKEN=[0-9a-f]{64}$' "${isolated}/.env"
 }
 
+generate_secrets_parses_commented_blank() {
+  local isolated="${TMP_DIR}/generate-secrets-comment"
+  mkdir -p "${isolated}/scripts"
+  cp "${ROOT_DIR}/scripts/generate-secrets.sh" "${isolated}/scripts/generate-secrets.sh"
+  cp "${ROOT_DIR}/scripts/runtime-mode.sh" "${isolated}/scripts/runtime-mode.sh"
+  write_env "${isolated}/.env" \
+    'NEXUS_AEON_ENABLED=false' \
+    'NEXUS_AGENTD_AUTH_TOKEN= # generate this internal token'
+  (cd "$isolated" && bash ./scripts/generate-secrets.sh >/dev/null)
+  grep -Eq '^NEXUS_AGENTD_AUTH_TOKEN=[0-9a-f]{64}$' "${isolated}/.env"
+}
+
+all_env_consumers_use_shared_parser() {
+  local path
+  for path in \
+    run-live-example.sh \
+    scripts/generate-secrets.sh \
+    scripts/smoke-memory-recall.sh \
+    scripts/smoke-timeline.sh
+  do
+    grep -Fq 'runtime-mode.sh' "${ROOT_DIR}/${path}" || return 1
+    if grep -Eq 'declare -A ENVV|load_env\(\)' "${ROOT_DIR}/${path}"; then
+      return 1
+    fi
+  done
+}
+
 TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 MGMT='abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
 HMAC='1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
@@ -299,6 +326,12 @@ assert_failure_matching "core mode preserves mock/test flag prohibition" \
 
 assert_success "secret generation preserves a missing final newline" \
   generate_secrets_preserves_line_boundary
+
+assert_success "secret generation treats a commented blank as empty" \
+  generate_secrets_parses_commented_blank
+
+assert_success "all memory and lifecycle consumers use the shared env parser" \
+  all_env_consumers_use_shared_parser
 
 printf '\n%d passed; %d failed\n' "$PASSES" "$FAILURES"
 [[ "$FAILURES" -eq 0 ]]

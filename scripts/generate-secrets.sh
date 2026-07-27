@@ -45,12 +45,8 @@ rand_hex() {
 }
 
 get_val() {
-  local key="$1" line val
-  line="$(grep -E "^${key}=" "$ENV_FILE" | head -n1 || true)"
-  val="${line#*=}"
-  val="${val%\"}"; val="${val#\"}"
-  val="${val%\'}"; val="${val#\'}"
-  printf '%s' "$val"
+  nexusiq_load_env "$ENV_FILE"
+  nexusiq_env_get "$1"
 }
 
 has_key() {

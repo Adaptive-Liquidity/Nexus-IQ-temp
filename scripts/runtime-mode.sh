@@ -60,19 +60,23 @@ nexusiq_load_env() {
     key="${key%"${key##*[![:space:]]}"}"
     [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
 
-    val="${val#"${val%%[![:space:]]*}"}"
-    if [[ "$val" == \"* ]]; then
-      if [[ "$val" =~ ^\"(.*)\"[[:space:]]*(#.*)?$ ]]; then
-        val="${BASH_REMATCH[1]}"
-      fi
-    elif [[ "$val" == \'* ]]; then
-      if [[ "$val" =~ ^\'(.*)\'[[:space:]]*(#.*)?$ ]]; then
-        val="${BASH_REMATCH[1]}"
-      fi
+    if [[ "$val" =~ ^[[:space:]]+# ]]; then
+      val=""
     else
-      # Compose starts an unquoted inline comment at whitespace + '#'.
-      val="${val%%[[:space:]]#*}"
-      val="${val%"${val##*[![:space:]]}"}"
+      val="${val#"${val%%[![:space:]]*}"}"
+      if [[ "$val" == \"* ]]; then
+        if [[ "$val" =~ ^\"(.*)\"[[:space:]]*(#.*)?$ ]]; then
+          val="${BASH_REMATCH[1]}"
+        fi
+      elif [[ "$val" == \'* ]]; then
+        if [[ "$val" =~ ^\'(.*)\'[[:space:]]*(#.*)?$ ]]; then
+          val="${BASH_REMATCH[1]}"
+        fi
+      else
+        # Compose starts an unquoted inline comment at whitespace + '#'.
+        val="${val%%[[:space:]]#*}"
+        val="${val%"${val##*[![:space:]]}"}"
+      fi
     fi
 
     NEXUSIQ_ENV["$key"]="$val"
