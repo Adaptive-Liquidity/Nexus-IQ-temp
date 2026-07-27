@@ -353,6 +353,12 @@ sed -i 's/^ALLOW_UNAUTH_MANAGEMENT=.*/ALLOW_UNAUTH_MANAGEMENT=/' "$EMPTY_UNAUTH_
 assert_failure_matching "an explicitly empty unauthenticated-management setting fails closed" \
   'ALLOW_UNAUTH_MANAGEMENT.*must.*false' run_validator "$EMPTY_UNAUTH_ENV"
 
+AMBIGUOUS_UNAUTH_ENV="${TMP_DIR}/ambiguous-unauth.env"
+cp "$FALSE_ENV" "$AMBIGUOUS_UNAUTH_ENV"
+sed -i 's/^ALLOW_UNAUTH_MANAGEMENT=.*/ALLOW_UNAUTH_MANAGEMENT=no/' "$AMBIGUOUS_UNAUTH_ENV"
+assert_failure_matching "an ambiguous unauthenticated-management setting fails closed" \
+  'ALLOW_UNAUTH_MANAGEMENT.*must.*false' run_validator "$AMBIGUOUS_UNAUTH_ENV"
+
 MOCK_ENV="${TMP_DIR}/mock.env"
 cp "$FALSE_ENV" "$MOCK_ENV"
 printf '%s\n' 'MOCK_PROVIDER=true' >>"$MOCK_ENV"

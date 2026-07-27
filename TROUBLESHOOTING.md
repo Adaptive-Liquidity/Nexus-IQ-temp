@@ -163,10 +163,11 @@ connect-mcp.sh)`.
 
 ---
 
-## ALLOW_UNAUTH_MANAGEMENT is true
+## ALLOW_UNAUTH_MANAGEMENT is not false
 
-**Symptom:** `./doctor.sh` prints `FAIL ALLOW_UNAUTH_MANAGEMENT is truthy —
-management plane auth is disabled`.
+**Symptom:** validation reports that `ALLOW_UNAUTH_MANAGEMENT` must be exactly
+`false`. Empty, ambiguous, and truthy values are rejected so management
+authentication cannot be disabled accidentally.
 
 **Fix:** Set it to `false` in `.env`:
 

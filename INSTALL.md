@@ -112,5 +112,6 @@ errors. Only case-insensitive `true` and `false` are accepted.
 - `POSTGRES_PASSWORD`, `MANAGEMENT_API_KEY`, `NEXUS_AEON_MANAGEMENT_KEY`,
   `NEXUS_AEON_HMAC_KEY`, and `AEON_EVIDENCE_SIGNING_KEY` are generated only
   for memory mode.
-- `ALLOW_UNAUTH_MANAGEMENT` may not be truthy in either mode.
+- When present, `ALLOW_UNAUTH_MANAGEMENT` must be exactly `false` in either
+  mode; empty, ambiguous, or truthy values fail closed.
 - `.env` is parsed as data and is never sourced or executed.
